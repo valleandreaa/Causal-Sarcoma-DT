@@ -1,0 +1,203 @@
+/ETL/data/*.xlsx
+/ETL/data/pdfs/*.*
+/ETL/test_ETL.ipynb
+/ETL/data/db
+
+/ETL/sarcoma_backup
+/Models/db/db_backup.bson/*
+# !/Models/db
+/Models/data/*
+/Models/backup/*
+/Models/checkpoints/*
+/Models/runs/*
+
+/output/*
+/*.csv
+/*.txt
+/imgs/*
+
+/runs/*
+/Models/scripts/*
+/data
+/bin
+# /saved_models/mock_run/encoder_decoder.pt/*
+# !/saved_models/mock_run/encoder_decoder.pt/encoder_20250518_112419.pt
+# !/saved_models/mock_run/encoder_decoder.pt/metadata_20250518_112419.json
+
+/saved_models/*
+/saved_models/.gitkeep
+/Models/saved_models
+#testing
+# !/ETL/data/adjumed_export_test.xlsx
+# !/ETL/data/pdfs/B24.10435_1.pdf
+
+/.pytest_cache/
+/.idea
+**/__pycache__/
+/.vscode
+/.conda
+
+
+/output.csv
+
+
+# Python-related files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyo
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Node.js-related files
+node_modules/
+npm-debug.log
+yarn-error.log
+.yarn-integrity
+.eslintcache
+.parcel-cache
+
+# Local environment files
+.env
+*.log
+*.tmp
+*.pid
+*.swp
+
+# macOS specific files
+*.DS_Store
+
+# IDE specific files
+.vscode/
+.idea/
+
+# Celery-related files (or other scheduler related)
+celerybeat-schedule
+celerybeat.pid
+*.celerybeat-schedule
+celerybeat.log
+celeryworker.log
+*.pid
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Coverage reports
+htmlcov/
+.coverage
+.tox/
+.cache
+.nox/
+
+# Test results
+*.pytest_cache/
+junit/
+coverage/
+/ETL/data/*.xlsx
+/ETL/data/pdfs/*.*
+/ETL/test_ETL.ipynb
+/ETL/data/db
+
+/Models/db/db_backup.bson/*
+!/Models/db
+/Models/data/*
+/Models/backup/*
+/Models/checkpoints/*
+/Models/runs/*
+/runs/*
+
+#testing
+!/ETL/data/adjumed_export_test.xlsx
+!/ETL/data/pdfs/B24.10435_1.pdf
+
+/.pytest_cache/
+/.idea
+**/__pycache__/
+/.vscode
+/.conda
+
+
+/output.csv
+
+
+# Python-related files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyo
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Node.js-related files
+node_modules/
+npm-debug.log
+yarn-error.log
+.yarn-integrity
+.eslintcache
+.parcel-cache
+
+# Local environment files
+.env
+*.log
+*.tmp
+*.pid
+*.swp
+
+# macOS specific files
+*.DS_Store
+
+# IDE specific files
+.vscode/
+.idea/
+
+# Celery-related files (or other scheduler related)
+celerybeat-schedule
+celerybeat.pid
+*.celerybeat-schedule
+celerybeat.log
+celeryworker.log
+*.pid
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Coverage reports
+htmlcov/
+.coverage
+.tox/
+.cache
+.nox/
+
+# Test results
+*.pytest_cache/
+junit/
+coverage/
+
+# System-specific files
+Thumbs.db
+ehthumbs.db
+Desktop.ini

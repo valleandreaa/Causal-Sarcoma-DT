@@ -1,0 +1,6 @@
+lifelines
+tabulate
+scikit-learn
+numpy
+pandas
+scipy

@@ -1,0 +1,247 @@
+adv_loss: lsgan
+batch_size: 64
+beta1: 0.5
+beta2: 0.999
+bidir: true
+criterion: l1
+d_hidden: 128
+data_config:
+  aggregator:
+  - $unwind:
+      path: $episodes
+      preserveNullAndEmptyArrays: true
+  - $match:
+      tumor_characteristics.histological_diagnosis:
+        $in:
+        - Angiosarcoma of soft tissues
+        - Atypical lipomatous tumor
+        - Dedifferentiated liposarcoma
+        - "Desmoid\u2010type fibromatosis"
+        - GIST
+        - Intramuscular myxoma
+        - Leiomyosarcoma
+        - Myxofibrosarcoma
+        - Myxoid liposarcoma
+        - Pleomorphic liposarcoma
+        - Solitary fibrous tumor
+        - Synovial sarcoma
+        - Tenosynovial giant cell tumor
+        - Undifferentiated / unclassified sarcoma
+  - $addFields:
+      mergedDiag:
+        $reduce:
+          in:
+            $mergeObjects:
+            - $$value
+            - $$this.fields
+          initialValue: {}
+          input:
+            $ifNull:
+            - $episodes.diagnosis
+            - []
+      mergedFields:
+        $reduce:
+          in:
+            $mergeObjects:
+            - $$value
+            - $$this.fields
+          initialValue: {}
+          input:
+            $ifNull:
+            - $episodes.treatments
+            - []
+  - $project:
+      _id: 1
+      episodes.chemotherapy: $episodes.chemotherapy
+      episodes.diagnosis.fields.cci: $mergedDiag.cci
+      episodes.diagnosis.fields.local_situation: $mergedDiag.local_situation
+      episodes.diagnosis.fields.presence_metastasis: $mergedDiag.presence_metastasis
+      episodes.diagnosis.fields.resection_margin_barrier: $mergedDiag.resection_margin_barrier
+      episodes.diagnosis.fields.resection_margin_mm: $mergedDiag.resection_margin_mm
+      episodes.diagnosis.fields.resection_mitotic: $mergedDiag.resection_mitotic
+      episodes.diagnosis.fields.resection_necrosis: $mergedDiag.resection_necrosis
+      episodes.diagnosis.fields.status: $mergedDiag.status
+      episodes.diagnosis.fields.whoops: $mergedDiag.whoops
+      episodes.radiotherapy: $episodes.radiotherapy
+      episodes.surgery: $episodes.surgery
+      episodes.treatments.fields.chemo_discontinuation: $mergedFields.chemo_discontinuation
+      episodes.treatments.fields.chemo_indication: $mergedFields.chemo_indication
+      episodes.treatments.fields.chemo_reason: $mergedFields.chemo_reason
+      episodes.treatments.fields.chemo_response_binary: $mergedFields.chemo_response_binary
+      episodes.treatments.fields.chemo_substance.Doxorubicin: $mergedFields.chemo_substance.Doxorubicin
+      episodes.treatments.fields.chemo_substance.Ecteinascidin 743: $mergedFields.chemo_substance.Ecteinascidin
+        743
+      episodes.treatments.fields.chemo_type: $mergedFields.chemo_type
+      episodes.treatments.fields.duration_chemotherapy: $mergedFields.duration_chemotherapy
+      episodes.treatments.fields.endpoint: $mergedFields.endpoint
+      episodes.treatments.fields.hyperthermia_additional: $mergedFields.hyperthermia_additional
+      episodes.treatments.fields.hyperthermia_sessions: $mergedFields.hyperthermia_sessions
+      episodes.treatments.fields.margin_status: $mergedFields.margin_status
+      episodes.treatments.fields.number_surgery_reoperations: $mergedFields.number_surgery_reoperations
+      episodes.treatments.fields.radiotherapy_indication: $mergedFields.radiotherapy_indication
+      episodes.treatments.fields.radiotherapy_total_dose: $mergedFields.radiotherapy_total_dose
+      episodes.treatments.fields.redonc_fractions: $mergedFields.redonc_fractions
+      episodes.treatments.fields.redonc_fractions_gray: $mergedFields.redonc_fractions_gray
+      episodes.treatments.fields.redonc_indication: $mergedFields.redonc_indication
+      episodes.treatments.fields.redonc_type: $mergedFields.redonc_type
+      episodes.treatments.fields.tumor_max_size: $mergedFields.tumor_max_size
+      episodes.treatments.fields.type_surgery: $mergedFields.type_surgery
+      general.age: $general.age
+      general.ajcc_uicc: $general.ajcc_uicc
+      general.biopsy_neoadjuvant_general: $general.biopsy_neoadjuvant_general
+      general.date_follow_up: $general.date_follow_up
+      general.date_of_diagnosis: $general.date_of_diagnosis
+      general.days_histological_diagnosis: $general.days_histological_diagnosis
+      general.gender: $general.gender
+      general.prom_score: $general.prom_score
+      general.sarculator_five: $general.sarculator_five
+      general.sarculator_ten: $general.sarculator_ten
+      tumor_characteristics.affected_tissue: $tumor_characteristics.affected_tissue
+      tumor_characteristics.anatomic_side_lesion: $tumor_characteristics.anatomic_side_lesion
+      tumor_characteristics.grading_fnclcc: $tumor_characteristics.grading_fnclcc
+      tumor_characteristics.histological_diagnosis: $tumor_characteristics.histological_diagnosis
+      tumor_characteristics.initial_metastasis: $tumor_characteristics.initial_metastasis
+      tumor_characteristics.lesion_site: $tumor_characteristics.lesion_site
+  clinical_features:
+    episodes.diagnosis.fields.cci: numeric
+    episodes.diagnosis.fields.local_situation: one_hot
+    episodes.diagnosis.fields.presence_metastasis: one_hot
+    episodes.diagnosis.fields.resection_margin_barrier: one_hot
+    episodes.diagnosis.fields.resection_margin_mm: numeric
+    episodes.diagnosis.fields.resection_mitotic: &id001
+      0-9: 1
+      10-19: 2
+      '>29': 3
+    episodes.diagnosis.fields.resection_necrosis: &id002
+      10-20%: 2
+      21-30%: 3
+      31-40%: 4
+      41-50%: 5
+      51-60%: 6
+      61-70%: 7
+      71-80%: 8
+      81-90%: 9
+      <10%: 1
+      '>90%': 10
+    episodes.diagnosis.fields.whoops: one_hot
+    general.age: numeric
+    general.ajcc_uicc: &id003
+      IA: 1
+      IB: 2
+      II: 3
+      IIA: 4
+      IIB: 5
+      III: 6
+      IIIA: 7
+      IIIB: 8
+      IV: 9
+      IVA: 10
+    general.biopsy_neoadjuvant_general: one_hot
+    general.days_histological_diagnosis: numeric
+    general.gender: one_hot
+    general.sarculator_five: numeric
+    general.sarculator_ten: numeric
+    tumor_characteristics.affected_tissue: one_hot
+    tumor_characteristics.anatomic_side_lesion: one_hot
+    tumor_characteristics.grading_fnclcc: &id004
+      G1: 1
+      G2: 2
+      G3: 3
+    tumor_characteristics.histological_diagnosis: one_hot
+    tumor_characteristics.initial_metastasis: one_hot
+    tumor_characteristics.lesion_site: one_hot
+  exclude_fields:
+  - _id
+  features:
+    episodes.diagnosis.fields.cci: numeric
+    episodes.diagnosis.fields.local_situation: one_hot
+    episodes.diagnosis.fields.presence_metastasis: one_hot
+    episodes.diagnosis.fields.resection_margin_barrier: one_hot
+    episodes.diagnosis.fields.resection_margin_mm: numeric
+    episodes.diagnosis.fields.resection_mitotic: *id001
+    episodes.diagnosis.fields.resection_necrosis: *id002
+    episodes.diagnosis.fields.status: one_hot
+    episodes.diagnosis.fields.whoops: one_hot
+    episodes.treatments.fields.chemo_discontinuation: one_hot
+    episodes.treatments.fields.chemo_indication: one_hot
+    episodes.treatments.fields.chemo_reason: one_hot
+    episodes.treatments.fields.chemo_response_binary: one_hot
+    episodes.treatments.fields.chemo_substance.Doxorubicin: one_hot
+    episodes.treatments.fields.chemo_substance.Ecteinascidin 743: one_hot
+    episodes.treatments.fields.chemo_type: one_hot
+    episodes.treatments.fields.duration_chemotherapy: numeric
+    episodes.treatments.fields.endpoint: one_hot
+    episodes.treatments.fields.margin_status: &id005
+      R0: 1
+      R1: 2
+      R2: 3
+    episodes.treatments.fields.number_surgery_reoperations: numeric
+    episodes.treatments.fields.radiotherapy_indication: one_hot
+    episodes.treatments.fields.radiotherapy_total_dose: numeric
+    episodes.treatments.fields.redonc_fractions: numeric
+    episodes.treatments.fields.redonc_fractions_gray: numeric
+    episodes.treatments.fields.redonc_indication: one_hot
+    episodes.treatments.fields.redonc_type: one_hot
+    episodes.treatments.fields.tumor_max_size: numeric
+    episodes.treatments.fields.type_surgery: one_hot
+    general.age: numeric
+    general.ajcc_uicc: *id003
+    general.biopsy_neoadjuvant_general: one_hot
+    general.days_histological_diagnosis: numeric
+    general.gender: one_hot
+    general.prom_score: numeric
+    general.sarculator_five: numeric
+    general.sarculator_ten: numeric
+    tumor_characteristics.affected_tissue: one_hot
+    tumor_characteristics.anatomic_side_lesion: one_hot
+    tumor_characteristics.grading_fnclcc: *id004
+    tumor_characteristics.histological_diagnosis: one_hot
+    tumor_characteristics.initial_metastasis: one_hot
+    tumor_characteristics.lesion_site: one_hot
+  fields:
+  - _id
+  - general.gender
+  - general.age
+  - tumor_characteristics.affected_tissue
+  labels:
+  - outcomes.status_last_patient_contact_information
+  treatment_features:
+    episodes.diagnosis.fields.status: one_hot
+    episodes.treatments.fields.chemo_discontinuation: one_hot
+    episodes.treatments.fields.chemo_indication: one_hot
+    episodes.treatments.fields.chemo_reason: one_hot
+    episodes.treatments.fields.chemo_response_binary: one_hot
+    episodes.treatments.fields.chemo_substance.Doxorubicin: one_hot
+    episodes.treatments.fields.chemo_substance.Ecteinascidin 743: one_hot
+    episodes.treatments.fields.chemo_type: one_hot
+    episodes.treatments.fields.duration_chemotherapy: numeric
+    episodes.treatments.fields.endpoint: one_hot
+    episodes.treatments.fields.margin_status: *id005
+    episodes.treatments.fields.number_surgery_reoperations: numeric
+    episodes.treatments.fields.radiotherapy_indication: one_hot
+    episodes.treatments.fields.radiotherapy_total_dose: numeric
+    episodes.treatments.fields.redonc_fractions: numeric
+    episodes.treatments.fields.redonc_fractions_gray: numeric
+    episodes.treatments.fields.redonc_indication: one_hot
+    episodes.treatments.fields.redonc_type: one_hot
+    episodes.treatments.fields.tumor_max_size: numeric
+    episodes.treatments.fields.type_surgery: one_hot
+    general.prom_score: numeric
+device: null
+epochs: 300
+g_hidden: 128
+id_field: _id
+lambda_cyc: 10.0
+lambda_id: 5.0
+lr_d: 1.0e-05
+lr_g: 0.0002
+mode: train
+num_layers: 4
+opt_disc: adam
+opt_gen: adam
+query_pipeline: []
+seed: 42
+seq_len: 8
+treat_dim: 16
+x_dim: 192
+y_dim: 768

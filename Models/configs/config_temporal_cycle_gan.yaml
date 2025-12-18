@@ -1,0 +1,194 @@
+# Configuration for the temporal CycleGAN baseline
+mode: debug
+query_pipeline: []
+seq_len: 8
+id_field: _id
+
+data_config:
+  fields:
+    - _id
+    - general.gender
+    - general.age
+    - tumor_characteristics.affected_tissue
+
+  features:
+    # -------- CLINICAL DATA --------
+     # Categorical → one‑hot dummy variables
+    general.gender: one_hot
+    tumor_characteristics.affected_tissue: one_hot
+    tumor_characteristics.histological_diagnosis: one_hot
+    tumor_characteristics.lesion_site: one_hot
+    tumor_characteristics.anatomic_side_lesion: one_hot
+    episodes.diagnosis.fields.local_situation: one_hot
+    episodes.diagnosis.fields.resection_margin_barrier: one_hot
+    tumor_characteristics.initial_metastasis: one_hot
+
+    # Categorical → learned embedding (ordinal indices)
+    tumor_characteristics.grading_fnclcc: ordinal
+    # general.resection_mitotic: ordinal
+    general.ajcc_uicc: ordinal
+    # episodes.diagnosis.fields.dignity: ordinal
+    episodes.diagnosis.fields.resection_necrosis: ordinal
+    episodes.diagnosis.fields.resection_mitotic: ordinal
+    # Numeric columns (floats)
+    general.age: numeric
+    general.days_histological_diagnosis: numeric
+    general.biopsy_neoadjuvant_general: one_hot
+
+    episodes.diagnosis.fields.whoops: one_hot
+    # episodes.diagnosis.fields.resection_grading: numeric
+    episodes.diagnosis.fields.resection_margin_mm: numeric
+
+    episodes.diagnosis.fields.cci: numeric
+    episodes.diagnosis.fields.presence_metastasis: one_hot
+
+    # mapping
+    # episodes.diagnosis.fields.dignity: {'benign': 1, 'intermediate': 2, 'malignant': 3}
+    tumor_characteristics.grading_fnclcc: {'G1': 1, 'G2': 2, 'G3': 3}
+    episodes.diagnosis.fields.resection_mitotic: {"0-9": 1, "10-19": 2, ">29": 3}
+    episodes.diagnosis.fields.resection_necrosis: {
+      '<10%': 1,
+      '10-20%': 2,
+      '21-30%': 3,
+      '31-40%': 4,
+      '41-50%': 5,
+      '51-60%': 6,
+      '61-70%': 7,
+      '71-80%': 8,
+      '81-90%': 9,
+      '>90%': 10
+    }
+    general.ajcc_uicc: {'IA': 1, 'IB': 2, 'II': 3, 'IIA': 4, 'IIB': 5, 'III': 6, 'IIIA': 7, 'IIIB': 8, 'IV': 9, 'IVA': 10}
+
+
+  # -------- TREATMENTS --------
+    # surgery
+    episodes.treatments.fields.tumor_max_size: numeric
+    episodes.treatments.fields.type_surgery: one_hot
+    episodes.treatments.fields.number_surgery_reoperations: numeric
+    episodes.treatments.fields.margin_status: ordinal
+
+    #chemo
+    episodes.treatments.fields.chemo_reason: one_hot
+    episodes.treatments.fields.chemo_indication: one_hot
+    episodes.treatments.fields.chemo_type: one_hot
+    episodes.treatments.fields.chemo_discontinuation: one_hot
+    episodes.treatments.fields.chemo_response: ordinal
+    episodes.treatments.fields.duration_chemotherapy: numeric
+
+    episodes.treatments.fields.chemo_substance.Ecteinascidin 743: one_hot
+    episodes.treatments.fields.chemo_substance.Doxorubicin: one_hot
+
+    #radio
+    episodes.treatments.fields.radiotherapy_indication: one_hot
+    episodes.treatments.fields.radiotherapy_total_dose: numeric
+
+    episodes.treatments.fields.redonc_indication: one_hot
+    episodes.treatments.fields.redonc_type: one_hot
+    episodes.treatments.fields.redonc_fractions: numeric
+    episodes.treatments.fields.redonc_fractions_gray: numeric
+    # episodes.treatments.fields.hyperthermia_additional: numeric
+    # episodes.treatments.fields.hyperthermia_sessions: numeric
+    general.status: one_hot
+    general.sarculator_five: numeric
+    general.sarculator_ten: numeric
+    general.prom_score: numeric
+
+
+
+
+
+    episodes.treatments.fields.margin_status: {'R0': 1, 'R1': 2, 'R2': 3}
+
+    episodes.treatments.fields.chemo_response: {'complete remission': 4,
+                    'partial remission': 3,
+                    'stable remission': 2,
+                    'Progressive disease': 1}
+
+  labels:
+    - episodes.surgery
+    - episodes.chemotherapy
+    - episodes.radiotherapy
+
+  aggregator:
+      - $unwind: "$episodes"
+      - $unwind: "$episodes.treatments"
+      - $unwind: "$episodes.diagnosis"
+      - "$match": {
+            "tumor_characteristics.histological_diagnosis": {
+              "$in": [
+                "Angiosarcoma of soft tissues",
+                "Atypical lipomatous tumor",
+                "Dedifferentiated liposarcoma",
+                "Desmoid‐type fibromatosis",
+                "GIST",
+                "Intramuscular myxoma",
+                "Leiomyosarcoma",
+                "Myxofibrosarcoma",
+                "Myxoid liposarcoma",
+                "Pleomorphic liposarcoma",
+                "Solitary fibrous tumor",
+                "Synovial sarcoma",
+                "Tenosynovial giant cell tumor",
+                "Undifferentiated / unclassified sarcoma"
+              ]
+            }
+          }
+      - $project: {
+            # ----- CLINICAL DATA -----
+            "general.gender": 1,
+            "general.age": 1,
+            "tumor_characteristics.affected_tissue": 1,
+            "tumor_characteristics.histological_diagnosis": 1,
+            "tumor_characteristics.lesion_site": 1,
+            "tumor_characteristics.anatomic_side_lesion": 1,
+            "tumor_characteristics.grading_fnclcc": 1,
+            "episodes.diagnosis.fields.local_situation": 1,
+            "episodes.diagnosis.fields.whoops": 1,
+            # "episodes.diagnosis.fields.resection_grading": 1, 
+            "episodes.diagnosis.fields.resection_necrosis": 1,
+            "episodes.diagnosis.fields.resection_mitotic": 1,
+            "episodes.diagnosis.fields.resection_margin_barrier": 1,
+            "episodes.diagnosis.fields.resection_margin_mm": 1,
+            "episodes.diagnosis.fields.cci": 1,
+            # "episodes.diagnosis.fields.dignity": 1,
+            "episodes.diagnosis.fields.presence_metastasis": 1,
+            "general.ajcc_uicc": 1,
+            "general.days_histological_diagnosis": 1,
+            "general.biopsy_neoadjuvant_general": 1,
+            "tumor_characteristics.initial_metastasis": 1,
+
+
+            # ----- TREATMENTS -----
+            "episodes.treatments.fields.tumor_max_size": 1,
+            "episodes.treatments.fields.type_surgery": 1,
+            # "episodes.treatments.fields.section":1,
+            "episodes.treatments.fields.number_surgery_reoperations": 1,
+            "episodes.treatments.fields.margin_status": 1,
+            "episodes.treatments.fields.chemo_reason": 1,
+            "episodes.treatments.fields.chemo_indication": 1,
+            "episodes.treatments.fields.chemo_type": 1,
+            "episodes.treatments.fields.chemo_substance.Ecteinascidin 743": 1,
+            "episodes.treatments.fields.chemo_substance.Doxorubicin": 1,
+            "episodes.treatments.fields.chemo_discontinuation": 1,
+            "episodes.treatments.fields.chemo_response": 1,
+            "episodes.treatments.fields.duration_chemotherapy": 1,
+            "episodes.treatments.fields.radiotherapy_indication": 1,
+            "episodes.treatments.fields.radiotherapy_total_dose": 1,
+            "episodes.treatments.fields.redonc_indication": 1,
+            "episodes.treatments.fields.redonc_type": 1,
+            "episodes.treatments.fields.redonc_fractions": 1,
+            "episodes.treatments.fields.redonc_fractions_gray": 1,
+            # "episodes.treatments.fields.hyperthermia_additional": 1,
+            # "episodes.treatments.fields.hyperthermia_sessions": 1,
+            "general.status": 1,
+            "general.sarculator_five": 1,
+            "general.sarculator_ten": 1,
+            "general.prom_score": 1,
+
+            # ----- LABELS -----
+            "episodes.surgery": 1,
+            "episodes.chemotherapy": 1,
+            "episodes.radiotherapy": 1,
+            "_id": 1
+      }

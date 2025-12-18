@@ -1,0 +1,13 @@
+pyyaml
+pymongo
+numpy
+pandas
+scikit-learn
+matplotlib
+torch
+torchvision
+torchaudio
+IPython
+tabulate
+python-dotenv
+lifelines

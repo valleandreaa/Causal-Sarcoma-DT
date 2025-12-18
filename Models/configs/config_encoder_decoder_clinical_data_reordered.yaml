@@ -1,0 +1,114 @@
+seed: 42
+batch_size: 256
+hidden_dim: 384
+learning_rate: 0.0001
+epochs: 1500
+patience: 50
+save_dir: saved_models/clinical_data_encoder_max
+log_every: 1
+data_config:
+  features:
+    general.sarculator_five: numeric
+    general.sarculator_ten: numeric
+    general.age: numeric
+    general.days_histological_diagnosis: numeric
+    episodes.diagnosis.fields.resection_margin_mm: numeric
+    episodes.diagnosis.fields.cci: numeric
+    general.gender: one_hot
+    tumor_characteristics.affected_tissue: one_hot
+    tumor_characteristics.histological_diagnosis: one_hot
+    tumor_characteristics.lesion_site: one_hot
+    tumor_characteristics.anatomic_side_lesion: one_hot
+    episodes.diagnosis.fields.local_situation: one_hot
+    episodes.diagnosis.fields.resection_margin_barrier: one_hot
+    tumor_characteristics.initial_metastasis: one_hot
+    general.biopsy_neoadjuvant_general: one_hot
+    episodes.diagnosis.fields.whoops: one_hot
+    episodes.diagnosis.fields.presence_metastasis: one_hot
+    tumor_characteristics.grading_fnclcc:
+      G1: 1
+      G2: 2
+      G3: 3
+    general.ajcc_uicc:
+      IA: 1
+      IB: 2
+      II: 3
+      IIA: 4
+      IIB: 5
+      III: 6
+      IIIA: 7
+      IIIB: 8
+      IV: 9
+      IVA: 10
+    episodes.diagnosis.fields.resection_necrosis:
+      '<10%': 1
+      '10-20%': 2
+      '21-30%': 3
+      '31-40%': 4
+      '41-50%': 5
+      '51-60%': 6
+      '61-70%': 7
+      '71-80%': 8
+      '81-90%': 9
+      '>90%': 10
+    episodes.diagnosis.fields.resection_mitotic:
+      '0-9': 1
+      '10-19': 2
+      '>29': 3
+
+  aggregator:
+  - $match:
+      tumor_characteristics.histological_diagnosis:
+        $in: [
+        "Angiosarcoma of soft tissues",
+        "Atypical lipomatous tumor",
+        "Dedifferentiated liposarcoma",
+        "Desmoid‐type fibromatosis",
+        "GIST",
+        "Intramuscular myxoma",
+        "Leiomyosarcoma",
+        "Myxofibrosarcoma",
+        "Myxoid liposarcoma",
+        "Pleomorphic liposarcoma",
+        "Solitary fibrous tumor",
+        "Synovial sarcoma",
+        "Tenosynovial giant cell tumor",
+        "Undifferentiated / unclassified sarcoma"
+        ]
+  - $unwind:
+      path: "$episodes"
+      preserveNullAndEmptyArrays: true
+  - $addFields:
+      mergedDiag:
+        $reduce:
+          input: { $ifNull: ["$episodes.diagnosis", []] }
+          initialValue: {}
+          in: { $mergeObjects: ["$$value", "$$this.fields"] }
+      mergedFields:
+        $reduce:
+          input: { $ifNull: ["$episodes.treatments", []] }
+          initialValue: {}
+          in: { $mergeObjects: ["$$value", "$$this.fields"] }
+  - $project:
+      _id: 1
+      general.sarculator_five: $general.sarculator_five
+      general.sarculator_ten: $general.sarculator_ten
+      general.age: $general.age
+      general.days_histological_diagnosis: $general.days_histological_diagnosis
+      episodes.diagnosis.fields.resection_margin_mm: $mergedDiag.resection_margin_mm
+      episodes.diagnosis.fields.cci: $mergedDiag.cci
+      general.gender: $general.gender
+      tumor_characteristics.affected_tissue: $tumor_characteristics.affected_tissue
+      tumor_characteristics.histological_diagnosis: $tumor_characteristics.histological_diagnosis
+      tumor_characteristics.lesion_site: $tumor_characteristics.lesion_site
+      tumor_characteristics.anatomic_side_lesion: $tumor_characteristics.anatomic_side_lesion
+      episodes.diagnosis.fields.local_situation: $mergedDiag.local_situation
+      episodes.diagnosis.fields.resection_margin_barrier: $mergedDiag.resection_margin_barrier
+      tumor_characteristics.initial_metastasis: $tumor_characteristics.initial_metastasis
+      general.biopsy_neoadjuvant_general: $general.biopsy_neoadjuvant_general
+      episodes.diagnosis.fields.whoops: $mergedDiag.whoops
+      episodes.diagnosis.fields.presence_metastasis: $mergedDiag.presence_metastasis
+      tumor_characteristics.grading_fnclcc: $tumor_characteristics.grading_fnclcc
+      general.ajcc_uicc: $general.ajcc_uicc
+      episodes.diagnosis.fields.resection_necrosis: $mergedDiag.resection_necrosis
+      episodes.diagnosis.fields.resection_mitotic: $mergedDiag.resection_mitotic

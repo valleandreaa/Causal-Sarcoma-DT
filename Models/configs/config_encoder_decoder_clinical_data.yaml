@@ -1,0 +1,135 @@
+###############################################
+# Mock configuration for train_encoder_decoder
+# Use this as a starting point and adapt the
+# feature list / hyper‑parameters to your data.
+###############################################
+
+# Reproducibility
+seed: 42
+
+
+
+# Training hyper‑parameters
+batch_size: 256          # mini‑batch size
+hidden_dim: 384          # first MLP hidden layer width
+learning_rate: 1.0e-4    # Adam LR
+epochs: 1500              # max training epochs
+patience: 50             # early‑stop patience
+
+# I/O
+save_dir: "saved_models/clinical_data_encoder_max"  # model save directory
+log_every: 1             # epoch‑level logging frequency
+
+
+
+data_config:
+  fields:
+    - _id
+    - general.gender
+    - general.age
+    - tumor_characteristics.affected_tissue
+
+
+
+  features:
+    # Categorical → one‑hot dummy variables
+      general.gender: one_hot
+      general.sarculator_five: numeric
+      general.sarculator_ten: numeric
+      tumor_characteristics.affected_tissue: one_hot
+      tumor_characteristics.histological_diagnosis: one_hot
+      tumor_characteristics.lesion_site: one_hot
+      tumor_characteristics.anatomic_side_lesion: one_hot
+      episodes.diagnosis.fields.local_situation: one_hot
+      episodes.diagnosis.fields.resection_margin_barrier: one_hot
+      tumor_characteristics.initial_metastasis: one_hot
+
+      # Categorical → learned embedding (ordinal indices)
+      tumor_characteristics.grading_fnclcc: ordinal
+      # general.resection_mitotic: ordinal
+      general.ajcc_uicc: ordinal
+      # episodes.diagnosis.fields.dignity: ordinal
+      episodes.diagnosis.fields.resection_necrosis: ordinal
+      episodes.diagnosis.fields.resection_mitotic: ordinal
+      # Numeric columns (floats)
+      general.age: numeric
+      general.days_histological_diagnosis: numeric
+      general.biopsy_neoadjuvant_general: one_hot
+      
+      episodes.diagnosis.fields.whoops: one_hot
+      # episodes.diagnosis.fields.resection_grading: numeric
+      episodes.diagnosis.fields.resection_margin_mm: numeric
+      
+      episodes.diagnosis.fields.cci: numeric
+      episodes.diagnosis.fields.presence_metastasis: one_hot
+      
+      # mapping
+      # episodes.diagnosis.fields.dignity: {'benign': 1, 'intermediate': 2, 'malignant': 3}
+      tumor_characteristics.grading_fnclcc: {'G1': 1, 'G2': 2, 'G3': 3}
+      episodes.diagnosis.fields.resection_mitotic: {"0-9": 1, "10-19": 2, ">29": 3}
+      episodes.diagnosis.fields.resection_necrosis: {
+        '<10%': 1,
+        '10-20%': 2,
+        '21-30%': 3,
+        '31-40%': 4,
+        '41-50%': 5,
+        '51-60%': 6,
+        '61-70%': 7,
+        '71-80%': 8,
+        '81-90%': 9,
+        '>90%': 10
+      }
+      general.ajcc_uicc: {'IA': 1, 'IB': 2, 'II': 3, 'IIA': 4, 'IIB': 5, 'III': 6, 'IIIA': 7, 'IIIB': 8, 'IV': 9, 'IVA': 10}
+
+
+  exclude_fields:
+    - _id
+
+
+  labels:
+    - outcomes.status_last_patient_contact_information
+
+  aggregator:
+    - $unwind:
+        path: "$episodes"
+        preserveNullAndEmptyArrays: true
+
+    - $addFields:
+        ## Merge every diagnosis.fields object inside the episode
+        mergedDiag:
+          $reduce:
+            input: { $ifNull: ["$episodes.diagnosis", []] }
+            initialValue: {}
+            in:
+              $mergeObjects: [ "$$value", "$$this.fields" ]
+
+    - $project:
+        _id: 1
+
+        # -------- patient / tumour static data ---------------------------------
+        "general.gender":                   "$general.gender"
+        "general.age":                      "$general.age"
+        "general.sarculator_five":   "$general.sarculator_five"
+        "general.sarculator_ten":    "$general.sarculator_ten"
+        "tumor_characteristics.affected_tissue":      "$tumor_characteristics.affected_tissue"
+        "tumor_characteristics.histological_diagnosis": "$tumor_characteristics.histological_diagnosis"
+        "tumor_characteristics.lesion_site":          "$tumor_characteristics.lesion_site"
+        "tumor_characteristics.anatomic_side_lesion": "$tumor_characteristics.anatomic_side_lesion"
+        "tumor_characteristics.grading_fnclcc":       "$tumor_characteristics.grading_fnclcc"
+        "general.ajcc_uicc":                "$general.ajcc_uicc"
+        "general.days_histological_diagnosis": "$general.days_histological_diagnosis"
+        "general.biopsy_neoadjuvant_general": "$general.biopsy_neoadjuvant_general"
+        "tumor_characteristics.initial_metastasis":   "$tumor_characteristics.initial_metastasis"
+
+        # -------- flattened diagnosis‑level fields -----------------------------
+        "episodes.diagnosis.fields.local_situation":   "$mergedDiag.local_situation"
+        "episodes.diagnosis.fields.whoops":            "$mergedDiag.whoops"
+        # "episodes.diagnosis.fields.resection_grading":  (not projected)
+        "episodes.diagnosis.fields.resection_necrosis": "$mergedDiag.resection_necrosis"
+        "episodes.diagnosis.fields.resection_mitotic":  "$mergedDiag.resection_mitotic"
+        "episodes.diagnosis.fields.resection_margin_barrier": "$mergedDiag.resection_margin_barrier"
+        "episodes.diagnosis.fields.resection_margin_mm": "$mergedDiag.resection_margin_mm"
+        "episodes.diagnosis.fields.cci":                "$mergedDiag.cci"
+        # "episodes.diagnosis.fields.dignity":           (not projected)
+        "episodes.diagnosis.fields.presence_metastasis": "$mergedDiag.presence_metastasis"
+          
