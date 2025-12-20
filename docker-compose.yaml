@@ -1,66 +1,5 @@
-x-airflow-common:
-  &airflow-common
-  build:
-    context: ./ETL              # folder that contains the Airflow Dockerfile
-    dockerfile: Dockerfile
-  image: etl_sarcoma_dt:latest 
-  environment:
-    &airflow-common-env
-    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
-    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
-    AIRFLOW__CORE__FERNET_KEY: ''
-    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
-    AIRFLOW__CORE__ENABLE_XCOM_PICKLING: 'true'
-    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
-    TRANSFORMERS_CACHE: /home/airflow/writable_cache
-    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
-    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
-  volumes:
-    - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
-    - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
-    - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
-    - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
-    - ${AIRFLOW_PROJ_DIR:-.}/ETL/etl_sdt:/usr/local/airflow/etl_sdt
-  user: "${AIRFLOW_UID:-50000}:0"
-  depends_on:
-    &airflow-common-depends-on
-    redis:
-      condition: service_healthy
-    postgres:
-      condition: service_healthy
-
 services:
   ### DATABASE SERVICES ###
-  postgres:
-    image: postgres:13
-    environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
-    volumes:
-      - postgres-db-volume:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "airflow"]
-      interval: 10s
-      retries: 5
-      start_period: 5s
-    restart: always
-
-  redis:
-    image: redis:7.2-bookworm
-    expose:
-      - 6379
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 30s
-      retries: 50
-      start_period: 30s
-    restart: always
-
   mongo_db:
     image: mongo:latest
     container_name: mongo_db
@@ -69,8 +8,8 @@ services:
     ports:
       - "28017:27017"
     environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: example
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
     networks:
       - backend
     healthcheck:
@@ -80,65 +19,6 @@ services:
       retries: 5
       start_period: 30s
 
-  ### AIRFLOW SERVICES ###
-  airflow-init:
-    <<: *airflow-common
-    command: bash -c "mkdir -p /opt/airflow/logs && chown -R airflow:0 /opt/airflow/logs && airflow db upgrade && airflow users create -r Admin -u admin -p admin -e admin@example.com -f Admin -l User"
-    depends_on:
-      <<: *airflow-common-depends-on
-
-  airflow-webserver:
-    <<: *airflow-common
-    command: webserver
-    ports:
-      - "8080:8080"
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    restart: always
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-
-  airflow-scheduler:
-    <<: *airflow-common
-    command: scheduler
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 5s
-    restart: always
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-
-  airflow-worker:
-    <<: *airflow-common
-    command: celery worker
-    healthcheck:
-      test:
-        - "CMD-SHELL"
-        - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    environment:
-      <<: *airflow-common-env
-      DUMB_INIT_SETSID: "0"
-    restart: always
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-
   ### ETL SERVICE  ###
   etl:
     build: ./ETL
@@ -146,7 +26,7 @@ services:
     depends_on:
       - mongo_db
     environment:
-      MONGO_URI: "mongodb://root:example@mongo_db:27017/?authSource=admin"
+      MONGO_URI: "mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@mongo_db:27017/?authSource=admin"
     volumes:
       - ./ETL:/app
     entrypoint: []
@@ -161,7 +41,7 @@ services:
     depends_on:
       - mongo_db
     environment:
-      MONGO_URI: "mongodb://root:example@mongo_db:27017/?authSource=admin"
+      MONGO_URI: "mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@mongo_db:27017/?authSource=admin"
     volumes:
       - ./Models:/app
       - saved_models:/app/saved_models
@@ -180,7 +60,7 @@ services:
       - "8501:8501"  # Streamlit Dashboard
       - "8888:8888"  # Jupyter Notebook
     environment:
-      MONGO_URI: "mongodb://root:example@mongo_db:27017/?authSource=admin"
+      MONGO_URI: "mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@mongo_db:27017/?authSource=admin"
     volumes:
       - ./Inference:/app
       - saved_models:/app/saved_models
@@ -193,6 +73,5 @@ networks:
     driver: bridge
 
 volumes:
-  postgres-db-volume:
   mongo-data:
   saved_models:

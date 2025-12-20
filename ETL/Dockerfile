@@ -1,18 +1,18 @@
-FROM apache/airflow:2.9.3-python3.12
+FROM python:3.12
 
 
-# Set the working directory
-WORKDIR /usr/local/airflow
+# set the working directory
+WORKDIR /app
 
-# Copy DAGs and local packages
-COPY dags/ /usr/local/airflow/dags/
-COPY requirements.txt/ /usr/local/airflow/requirements.txt
-COPY etl_sdt/ /usr/local/airflow/etl_sdt
-COPY data/ /usr/local/airflow/data
-COPY pipelines/ /usr/local/airflow/pipelines
+# check if i need to remove something here
+COPY dags/ /app/dags/
+COPY requirements.txt /app/requirements.txt
+COPY etl_sdt/ /app/etl_sdt
+COPY data/ /app/data
+COPY pipelines/ /app/pipelines
 
-# Install any required packages
-RUN pip install apache-airflow==${AIRFLOW_VERSION} -r /usr/local/airflow/requirements.txt
+# install any required packages
+RUN pip install -r /app/requirements.txt
 
-# Set PYTHONPATH
-ENV PYTHONPATH="${PYTHONPATH}:/usr/local/airflow/etl_sdt"
+# set PYTHONPATH
+ENV PYTHONPATH="${PYTHONPATH}:/app/etl_sdt"
