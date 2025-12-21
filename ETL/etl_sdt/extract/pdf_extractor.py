@@ -1,5 +1,5 @@
-from pdfminer.high_level import extract_text
-from pdfminer.layout import LAParams
+# from pdfminer.high_level import extract_text
+# from pdfminer.layout import LAParams
 import re
 
 from etl_sdt.utils.logging_config import logger

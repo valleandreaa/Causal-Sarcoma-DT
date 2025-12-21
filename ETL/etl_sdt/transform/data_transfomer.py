@@ -7,12 +7,12 @@ import json
 import os 
 from etl_sdt.extract.pdf_extractor import extract_text_from_pdf
 import unicodedata
-from langdetect import detect
+# from langdetect import detect
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from typing import Any, List, Dict, Union
 from etl_sdt.utils.logging_config import logger
-import langid
+# import langid
 from sklearn.model_selection import train_test_split
 from math import ceil
 import itertools
@@ -1361,6 +1361,47 @@ class DictionaryTransformer:
             column = column.apply(lambda x: list(set(x)) if isinstance(x, list) else x)
         return column      
 
+    def transform_nested_values(self, df):
+        """
+        Transforms nested values in cells by splitting on common separators (;, /, |).
+        If a cell contains multiple values separated by these delimiters, converts them into a list.
+        
+        Args:
+            df (pd.DataFrame): The input DataFrame to be transformed.
+            features_mapping (dict): A dictionary mapping features (optional, can be used to target specific columns).
+        
+        Returns:
+            pd.DataFrame: The DataFrame with nested values split into lists.
+        """
+        def split_nested_values(value):
+            """Helper function to split a value by separators and return as list or original value."""
+            if pd.isna(value):
+                return value
+            
+            if isinstance(value, list):
+                # If already a list, recursively process each element
+                return [split_nested_values(item) for item in value]
+            
+            if isinstance(value, str):
+                # Check if value contains any of the separators
+                if ';' in value or '/' in value or '|' in value:
+                    # Split by any of the separators and clean up whitespace
+                    # Use regex to split by multiple separators
+                    import re
+                    parts = re.split(r'[;/|]', value)
+                    # Strip whitespace from each part and remove empty strings
+                    cleaned_parts = [part.strip() for part in parts if part.strip()]
+                    # Return as list if we have multiple parts, otherwise return single value
+                    return cleaned_parts if len(cleaned_parts) > 1 else (cleaned_parts[0] if cleaned_parts else value)
+            
+            return value
+        
+        # Apply the transformation to all cells in the dataframe
+        for column in df.columns:
+            df[column] = df[column].apply(split_nested_values)
+        
+        return df
+
     # Define the main transformation function
     def transform_dataframe(self, df: pd.DataFrame, data_format_dict: Dict[str, Any]) -> pd.DataFrame:
         """
@@ -2086,6 +2127,14 @@ class FeatureExtractor:
     
     def post_process_mc(self):
         return (self.get_metastasis_after_first_treatment()
+                .df)
+    
+    def process_frozen(self):
+        return (self
+                .df)
+    
+    def post_process_frozen(self):
+        return (self
                 .df)
 
 
