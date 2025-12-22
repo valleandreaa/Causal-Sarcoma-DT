@@ -1,74 +1,74 @@
-asttokens
-certifi
-cffi
-charset-normalizer
-colorama
-comm
-cryptography
-debugpy
-decorator
-dnspython
-et-xmlfile
-exceptiongroup
-executing
-filelock
-fsspec
-huggingface-hub
-idna
-importlib_metadata
-intel-openmp
-ipykernel
-ipython
-jedi
-Jinja2
-jupyter_client
-jupyter_core
-MarkupSafe
-matplotlib-inline
-mkl
-mpmath
-nest_asyncio
-networkx
-numpy
-openpyxl
-packaging
-pandas
-parso
-pdfminer.six
-pickleshare
-platformdirs
-prompt_toolkit
-psutil
-pure-eval
-pycparser
-Pygments
-pymongo
-python-dateutil
-pytz
-PyYAML
-pyzmq
-regex
-requests
-setuptools
-six
-stack-data
-sympy
-tbb
-torch
-tornado
-tqdm
-traitlets
-transformers
-typing_extensions
-tzdata
-urllib3
-wcwidth
-wheel
-zipp
-langdetect
-sentencepiece
-pymongo
-sacremoses
-langid
-python-dotenv
-scikit-learn
+# asttokens
+# certifi
+# cffi
+# charset-normalizer
+# colorama
+# comm
+# cryptography
+# debugpy
+# decorator
+# dnspython
+# et-xmlfile
+# exceptiongroup
+# executing
+# filelock
+# fsspec
+# huggingface-hub
+# idna
+# importlib_metadata
+# intel-openmp
+# ipykernel
+# ipython
+# jedi
+# Jinja2
+# jupyter_client
+# jupyter_core
+# MarkupSafe
+# matplotlib-inline
+# mkl
+# mpmath
+# nest_asyncio
+# networkx
+# numpy
+# openpyxl
+# packaging
+# pandas
+# parso
+# pdfminer.six
+# pickleshare
+# platformdirs
+# prompt_toolkit
+# psutil
+# pure-eval
+# pycparser
+# Pygments
+# pymongo
+# python-dateutil
+# pytz
+# PyYAML
+# pyzmq
+# regex
+# requests
+# setuptools
+# six
+# stack-data
+# sympy
+# tbb
+# torch
+# tornado
+# tqdm
+# traitlets
+# transformers
+# typing_extensions
+# tzdata
+# urllib3
+# wcwidth
+# wheel
+# zipp
+# langdetect
+# sentencepiece
+# pymongo
+# sacremoses
+# langid
+# python-dotenv
+# scikit-learn

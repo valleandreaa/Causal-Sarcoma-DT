@@ -1114,6 +1114,23 @@ class DictionaryTransformer:
         # If no diagnosis found, episode['diagnosis'] remains as initialized empty array []
         
         return episode
+    
+    def _is_valid_value(self, val):
+        """
+        Checks if a value is valid (non-null), handling both lists and single values.
+        
+        Args:
+            val: The value to check (can be a list or single value)
+        
+        Returns:
+            bool: True if the value is valid (non-null), False otherwise
+        """
+        if isinstance(val, list):
+            # For lists, check if not empty and has at least one non-null value
+            return len(val) > 0 and any(pd.notnull(v) for v in val)
+        else:
+            # For single values, use pandas notnull check
+            return pd.notnull(val)
 
     def  restructure_to_records(self, df: pd.DataFrame, relevant_features: dict, key_column: str, timeline: bool = False) -> list:
         """
@@ -1137,8 +1154,13 @@ class DictionaryTransformer:
             
             row = group_df.iloc[-1]
 
-            for group_name in relevant_features['static'].keys():
-                patient_record[group_name] = self.extract_columns(row, relevant_features['static'][group_name])
+            # Extract static features - each group_name has a list of field names
+            for group_name, field_list in relevant_features['static'].items():
+                patient_record[group_name] = {}
+                for field_name in field_list:
+                    val = row.get(field_name)
+                    if self._is_valid_value(val):
+                        patient_record[group_name][field_name] = val
 
             #TODO: adapt 
             # group_df = self._sort_by_column(group_df, column=['patient_id', 'time_relative_sarcomaboard_presentation'], ascending=True)
@@ -1146,23 +1168,51 @@ class DictionaryTransformer:
             patient_record['diagnosis_treatment_sequence'] = []
             for idx, (index, row) in enumerate(group_df.iterrows(), start=1):
                              
-                for group, features in relevant_features['dynamic'].items():
-
-                    dict_tmp = self.extract_columns(row, relevant_features['dynamic'][group])
-                    if dict_tmp.get('fields', None):
-                        if (group == 'surgery' and row.get('surgery_flag', None) == 1) | \
-                            (group == 'chemotherapy' and row.get('chemotherapy_flag', None) == 1) | \
-                            (group == 'radiotherapy' and row.get('radiation_oncology_flag', None) == 1) | \
-                            (group == 'diagnosis') | \
-                            (group == 'metastasis' and row.get('metastasis_flag', None) == 1) :
-
+                for group, config in relevant_features['dynamic'].items():
+                    # Extract the fields from the config
+                    field_list = config.get('fields', [])
+                    
+                    # Build dictionary with fields that have non-null values
+                    dict_tmp = {}
+                    for field_name in field_list:
+                        val = row.get(field_name)
+                        if self._is_valid_value(val):
+                            dict_tmp[field_name] = val
+                    
+                    # Also extract date_field and date_sarcoma_board if present
+                    if 'date_field' in config:
+                        date_val = row.get(config['date_field'])
+                        if self._is_valid_value(date_val):
+                            dict_tmp['date_field'] = date_val
+                    
+                    if 'date_sarcoma_board' in config:
+                        date_sb = row.get(config['date_sarcoma_board'])
+                        if self._is_valid_value(date_sb):
+                            dict_tmp['date_sarcoma_board'] = date_sb
+                    
+                    # Only add if there are fields with values
+                    if dict_tmp:
+                        # Check flags for certain sections
+                        should_include = False
+                        if group == 'surgery' and row.get('surgery_flag', None) == 1:
+                            should_include = True
+                        elif group == 'systemic_therapy' and row.get('chemotherapy_flag', None) == 1:
+                            should_include = True
+                        elif group in ['radiotherapy', 'radiotherapy_first'] and row.get('radiation_oncology_flag', None) == 1:
+                            should_include = True
+                        elif group in ['diagnosis', 'radiology', 'events', 'recurrence_metastasis']:
+                            should_include = True
+                        elif row.get('metastasis_flag', None) == 1:
+                            should_include = True
+                        
+                        if should_include:
                             dict_tmp['section'] = group
                             patient_record['diagnosis_treatment_sequence'].append(dict_tmp)
             
             # Extract follow-up date for timeline episodes
             follow_up_date = None
-            if timeline and patient_record.get('general', {}).get('date_follow_up'):
-                follow_up_date = patient_record['general']['date_follow_up']
+            if timeline and patient_record.get('general', {}).get('date_last_follow_up'):
+                follow_up_date = patient_record['general']['date_last_follow_up']
                     
             patient_record['episodes'] = self.episode_restructure_data(
                 patient_record['diagnosis_treatment_sequence'], 
@@ -1419,7 +1469,7 @@ class DictionaryTransformer:
 
                 df[column] = self.convert_column(df[column], data_type)
                 df[column] = self.process_list_column(df[column])
-                df[column] = df[column].astype('object')
+                # df[column] = df[column].astype('object')
         
         return df
 
@@ -1703,9 +1753,9 @@ class FeatureExtractor:
     
     def get_age(self):
         
-        self.df['age']  = datetime.today().year - self.df['birth_date'] 
+        self.df['age']  = self.df['date_pathology_report'].dt.year - self.df["year_of_birth"] 
 
-        self.relevant_features['static']['general']['age'] = 'age'
+        self.relevant_features['static']['general'].append('age')
         
         self.data_type_mapping['age'] = int
         return self
@@ -2096,13 +2146,66 @@ class FeatureExtractor:
         Returns:
             self: Updates the DataFrame with the adjusted status.
         """
+        # Defragment DataFrame to avoid performance warning
+        self.df = self.df.copy()
+        self.df['initial_size'] = (self.df['size_a_mm']**2 + self.df['size_b_mm']**2 + self.df['size_c_mm']**2)**0.5
+        self.relevant_features['static']['tumor_characteristics'].append('initial_size')
+        self.data_type_mapping['initial_size'] = int
+        return self
+
+
+    def get_merge_grading_biopsy_resection(self):
         
-        # Apply the adjustment to each patient group
+        self.df['grading_biopsy'], self.df['grading_resection']
+
         self.df['initial_size'] = (self.df['initial_size_a']**2 + self.df['initial_size_b']**2 + self.df['initial_size_c']**2)**0.5
         self.relevant_features['dynamic']['diagnosis']['fields']['initial_size'] = 'initial_size'
         self.data_type_mapping['initial_size'] = float
         return self
 
+    def time_range_in_episodes(self, start_date_col, end_date_col):
+        months_diff = (self.df[start_date_col].dt.year - self.df[end_date_col].dt.year) * 12 + \
+                      (self.df[start_date_col].dt.month - self.df[end_date_col].dt.month)
+        return (months_diff / 6).astype(int)
+ 
+    def time_range_in_days(self, start_date_col, end_date_col):
+        days_diff = (self.df[start_date_col] - self.df[end_date_col]).dt.days
+        return days_diff
+ 
+
+    def get_episodes_whoops(self):
+        
+        self.df["episodes_whoops"]  = self.time_range_in_episodes('date_whoops', 'date_pathology_report')
+        self.df["episodes_surgery"]  = self.time_range_in_episodes('date_index_surgery', 'date_pathology_report')
+       
+        self.df["episodes_surgery"] = self.df.apply(
+            lambda row: min(filter(pd.notna, [row.get("episodes_whoops"), row.get("episodes_surgery")]), default=None)
+            if pd.notna(row.get("episodes_whoops")) or pd.notna(row.get("episodes_surgery"))
+            else None,
+            axis=1
+        )
+
+        self.relevant_features['dynamic']['surgery']['episodes_field'] = 'episodes_surgery'
+        self.data_type_mapping['episodes_surgery'] = int
+        return self
+
+    def get_episodes_systemic(self):
+        
+        self.df["episodes_systemic"]  = self.time_range_in_episodes('cycle_start_date', 'date_pathology_report')
+
+        self.relevant_features['dynamic']['systemic_therapy']['episodes_field'] = 'episodes_systemic'
+        self.data_type_mapping['episodes_systemic'] = int
+        return self
+    
+    def get_systemic_timerange(self):
+        
+        self.df["systemic_timerange"]  = self.time_range_in_days('cycle_end_date', 'cycle_start_date')
+
+        self.relevant_features['dynamic']['systemic_therapy']['fields'].append('systemic_timerange')    
+        self.data_type_mapping['systemic_timerange'] = int
+        return self
+    
+    
 
     def process_mc(self):
         return (self.get_age()
@@ -2130,7 +2233,12 @@ class FeatureExtractor:
                 .df)
     
     def process_frozen(self):
-        return (self
+        return (self.get_age()
+                .get_initial_size()
+                .get_episodes_whoops()
+                .get_episodes_systemic()
+                .get_systemic_timerange()
+
                 .df)
     
     def post_process_frozen(self):

@@ -6,8 +6,7 @@ import sys
 from dotenv import load_dotenv
 import numpy as np
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-print(sys.path)
+# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from etl_sdt.extract.excel_extractor import open_excel, chunking, merge_dataframes_on_id
 from etl_sdt.configs.config_frozen import *
@@ -88,17 +87,17 @@ def upsert_record(record, collection):
 
 
 def main(file_path, preview=False, dry_run=False, preview_n=5, delete_collection=False, timeline=False):
-    load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
+    load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../../', '.env'))
 
-    # client = MongoClient(os.getenv('MONGO_URI'))
-    # db = client[os.getenv('MONGO_DB')]
-    # collection = db[os.getenv('MONGO_COLLECTION')]
+    client = MongoClient(os.getenv('MONGO_URI'))
+    db = client[os.getenv('MONGO_DB')]
+    collection = db[os.getenv('MONGO_COLLECTION')]
 
     if delete_collection:
         logger.info("Dropping collection before processing...")
             
 
-    process_file(file_path, collection=None, preview=preview, preview_n=preview_n, timeline=timeline)
+    process_file(file_path, collection=collection, preview=preview, preview_n=preview_n, timeline=timeline)
 
 
 if __name__ == "__main__":

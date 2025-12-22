@@ -2,32 +2,17 @@ feature_mapping = {
 
     "static": {
         "general": [
-            "patient_id",
             "gender",
-            "year_of_birth",
-            "general_consent_agreed",
-            "date_first_patient_contact",
-            "date_pathology_report",
-            "date_death",
-            "date_last_follow_up",
-            "last_status",
             "institution",
+            "date_pathology_report"
         ],
 
         "tumor_characteristics": [
+            "biopsy_grading",
             "who_diagnosis_code",
-            "who_diagnosis_other_specify",
             "anatomic_region_code",
             "anatomic_region_grouping",
             "anatomic_region_side",
-            "biopsy_type",
-            "biopsy_neoadjuvant",
-            "biopsy_grading",
-            "resection_grading",
-            "size_a_mm",
-            "size_b_mm",
-            "size_c_mm",
-            "whoops",
         ],
 
         "treatments": [
@@ -61,47 +46,30 @@ feature_mapping = {
 
         "surgery": {
             "date_field": "date_index_surgery",
-            "date_sarcoma_board": "date_sarcoma_board",
+            "episodes_field": "episodes_surgery",
             "fields": [
-                "surgery_indication",
-                "surgery_institution",
+                "resection_grading",
+                "whoops",
+                "whoops_margin_status",
                 "tumor_max_size_before_surgery",
                 "pathologist_margin_judgement",
-                "whoops",
-            ],
-        },
+                "surgery_indication",
+                "surgery_institution",
 
-        "radiology": {
-            "date_field": "radiology_exam_date",
-            "date_sarcoma_board": "date_sarcoma_board",
-            "fields": [
-                "radiology_exam_date",
-                "radiology_exam_type",
-                "initial_radiology_exam_date",
-                "initial_radiology_exam_type",
-                "radiology_exams_listed",
+                
             ],
         },
 
         "systemic_therapy": {
             "date_field": "cycle_start_date",
-            "date_sarcoma_board": "date_sarcoma_board",
+            "episodes_field": "episodes_systemic",
             "fields": [
                 "systemic_treatment_reason",
                 "line_of_treatment",
                 "systemic_therapy_type",
                 "drug_name",
-                "soft_tissue_protocol_name",
-                "bone_protocol_name",
-                "clinical_trial",
-                "cycle_start_date",
-                "cycle_end_date",
                 "systemic_therapy_discontinuation_reason",
                 "num_cycles_executed",
-                "dose_unit",
-                "dose_reduction",
-                "applied_dose_mg_m2",
-                "toxicity_days_of_cycle",
                 "toxicity_type",
                 "ctcae_grade",
             ],
