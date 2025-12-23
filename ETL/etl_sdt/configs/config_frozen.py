@@ -13,6 +13,7 @@ feature_mapping = {
             "anatomic_region_code",
             "anatomic_region_grouping",
             "anatomic_region_side",
+            "metastasis_present_at_diagnosis"
         ],
 
         "treatments": [
@@ -77,7 +78,7 @@ feature_mapping = {
 
         "radiotherapy": {
             "date_field": "radiotherapy_start_date",
-            "date_sarcoma_board": "date_sarcoma_board",
+            "episodes_field": "episodes_radiotherapy",
             "fields": [
                 "radiotherapy_start_date",
                 "radiotherapy_end_date",
@@ -86,55 +87,39 @@ feature_mapping = {
                 "radiotherapy_type",
                 "radiotherapy_ptv",
                 "radiotherapy_gtv",
-                "radiotherapy_total_dose",
-                "hyperthermia_status",
-                "notes",
+                "radiotherapy_total_dose"
             ],
         },
 
-        "radiotherapy_first": {
-            "date_field": "first_radiotherapy_start_date",
-            "date_sarcoma_board": "date_sarcoma_board",
+        "local_recurrence": {
+            "date_field": "date_local_recurrence",
+            "episodes_field": "episodes_local_recurrence",
             "fields": [
-                "first_radiotherapy_start_date",
-                "first_radiotherapy_end_date",
-                "first_radiotherapy_indication",
-                "first_radiotherapy_type",
-                "first_radiotherapy_num_fractions",
-                "first_radiotherapy_total_dose",
-                "first_redonc_indication",
-                "first_redonc_type",
-                "radiotherapy_fractions_gray",
-                "hyperthermia_status_interventional_radiology",
+                "date_local_recurrence",
+                "treatment_local_recurrence",
+                "date_local_recurrence_surgery",
             ],
         },
 
-        "events": {
-            "date_field": "event_date",
+        "metastasis": {
+            "date_field": "date_metastasis",
+            "episodes_field": "episodes_metastasis",
             "fields": [
-                "event_type",
-                "event_date",
-            ],
-        },
-
-        "recurrence_metastasis": {
-            "date_sarcoma_board": "date_sarcoma_board",
-            "fields": [
-                "date_local_recurrence_1",
-                "treatment_local_recurrence_1",
-                "date_local_recurrence_surgery_1",
-                "date_local_recurrence_2",
-                "treatment_local_recurrence_2",
-                "date_local_recurrence_surgery_2",
-                "date_pulmonary_metastasis",
-                "date_extrapulmonary_metastasis",
+                "metastasis_type",  # pulmonary or extrapulmonary
                 "site_extrapulmonary_metastasis",
-                "metastasis_present_at_diagnosis",
+            ],
+        },
+
+        "follow_up": {
+            "date_field": "date_last_follow_up",
+            "episodes_field": "episodes_follow_up",
+            "fields": [
+                "last_status",
+                "date_death",
                 "metastasis_at_follow_up",
             ],
         },
-    },
-}
+}}
 
 
 label_dict = {
@@ -778,16 +763,8 @@ data_type_mapping = {
     "hyperthermia_status": str,
     "hyperthermia_status_interventional_radiology": str,
     "notes": str,
-
-    # radiotherapy (1. Teil) distinct
-    "first_radiotherapy_start_date": "datetime",
-    "first_radiotherapy_end_date": "datetime",
-    "first_radiotherapy_indication": str,
-    "first_radiotherapy_type": str,
-    "first_radiotherapy_num_fractions": float,
-    "first_radiotherapy_total_dose": float,
-    "first_redonc_indication": str,
-    "first_redonc_type": str,
+    "redonc_indication": str,
+    "redonc_type": str,
 
     # systemic therapy (SystTx)
     "systemic_treatment_reason": str,

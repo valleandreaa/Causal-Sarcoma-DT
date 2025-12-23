@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import re 
+import copy
 from collections import defaultdict 
 import warnings
 import json
@@ -798,8 +799,15 @@ class DictionaryTransformer:
         if timeline:
             # Timeline-based aggregation: 6-month episodes
             
-            # Get the earliest date as the baseline
-            baseline_date = treatments_with_date[0]['_parsed_date']
+            # Get the baseline date - prefer date_pathology_report from patient_static_data
+            baseline_date = None
+            if patient_static_data and patient_static_data.get('general', {}).get('date_pathology_report'):
+                pathology_date = patient_static_data['general']['date_pathology_report']
+                baseline_date = parse_follow_up_date(pathology_date)
+            
+            # Fall back to earliest treatment date if pathology report date not available
+            if not baseline_date:
+                baseline_date = treatments_with_date[0]['_parsed_date']
             
             # Determine the end date for episodes
             last_treatment_date = treatments_with_date[-1]['_parsed_date']
@@ -817,21 +825,47 @@ class DictionaryTransformer:
             while current_start <= end_date:
                 current_end = current_start + relativedelta(months=6) - relativedelta(days=1)
                 
+                # Calculate actual duration in days
+                duration_days = (current_end - current_start).days + 1  # +1 to include both start and end day
+                
                 # Find treatments in this 6-month period
                 episode_treatments = []
                 for treatment in treatments_with_date:
                     if current_start <= treatment['_parsed_date'] <= current_end:
-                        episode_treatments.append(treatment)
+                        # Deep copy to avoid reference issues
+                        episode_treatments.append(treatment.copy())
                 
                 # Create episode
                 episode = {
                     "episode_id": episode_id,
                     "start_date": current_start,
                     "end_date": current_end,
-                    "duration_days": 180,  # Approximately 6 months
+                    "duration_days": duration_days,
                     "n_interventions": len(episode_treatments),
                     "treatments": episode_treatments
                 }
+                
+                # If episode has treatments but no diagnosis, copy diagnosis from previous episode
+                if episode_treatments and episodes:
+                    has_diagnosis = any(t.get('section') == 'diagnosis' for t in episode_treatments)
+                    if not has_diagnosis:
+                        # Find the most recent diagnosis
+                        for prev_ep in reversed(episodes):
+                            if prev_ep["treatments"]:
+                                for treatment in prev_ep["treatments"]:
+                                    if treatment.get('section') == 'diagnosis':
+                                        # Copy diagnosis with updated date
+                                        copied_diagnosis = copy.deepcopy(treatment)
+                                        copied_diagnosis['_is_copied'] = True
+                                        if 'date_field' in copied_diagnosis:
+                                            copied_diagnosis['date_field'] = current_start.isoformat()
+                                        if 'date_sarcomaboard' in copied_diagnosis:
+                                            copied_diagnosis['date_sarcomaboard'] = current_start.isoformat()
+                                        copied_diagnosis['_parsed_date'] = current_start
+                                        episode["treatments"].insert(0, copied_diagnosis)
+                                        episode["n_interventions"] = len(episode["treatments"])
+                                        break
+                                break
                 
                 # If no treatments in this period and there are previous episodes,
                 # handle gap-filling based on whether this is an intermediary gap or the final episode
@@ -882,7 +916,8 @@ class DictionaryTransformer:
                             for treatment in previous_episode["treatments"]:
                                 # Only copy diagnosis and metastasis sections
                                 if treatment.get('section') in ['diagnosis', 'metastasis']:
-                                    copied_treatment = treatment.copy()
+                                    # Deep copy to preserve nested fields
+                                    copied_treatment = copy.deepcopy(treatment)
                                     # Mark as copied and update dates (but keep original status)
                                     copied_treatment['_is_copied'] = True
                                     if 'date_field' in copied_treatment:
@@ -937,13 +972,16 @@ class DictionaryTransformer:
                 episodes.append(current_episode)
         
         # Remove the temporary parsed date and convert datetimes to ISODate strings.
-        for episode in episodes:
+        # Also apply data_assembler to each episode
+        for i, episode in enumerate(episodes):
             episode['start_date'] = episode['start_date'].isoformat().replace("+00:00", "Z")
             episode['end_date'] = episode['end_date'].isoformat().replace("+00:00", "Z")
             for treatment in episode['treatments']:
                 treatment.pop('_parsed_date', None)
+            
+            # Apply data_assembler and store result back in the list
+            episodes[i] = self.data_assembler(episode)
         
-            episode = self.data_assembler(episode)
         return episodes
 
     def data_assembler(self, episode):
@@ -961,8 +999,11 @@ class DictionaryTransformer:
             merged = {}
             for treatment in treatments:
                 section = treatment.get("section")
-                # assign the treatmens presence
-                if section in ["surgery", "chemotherapy", "radiotherapy", "metastasis"]:
+                # assign the treatments presence
+                # Count systemic_therapy as chemotherapy
+                if section == "systemic_therapy":
+                    episode["chemotherapy"] = 1
+                elif section in ["surgery", "chemotherapy", "radiotherapy", "metastasis"]:
                     episode[section] = 1
                 if section is not None:
                     if section not in merged:
@@ -1097,10 +1138,10 @@ class DictionaryTransformer:
         diagnosis = []
         for item in merged_sections:
             sec = item.get('section')
-            if sec in ['surgery', 'chemotherapy', 'radiotherapy']:
+            # Include all treatment-related sections
+            if sec in ['surgery', 'chemotherapy', 'radiotherapy', 'systemic_therapy']:
                 treatments.append(item)
-
-            elif sec in ['diagnosis', 'metastasis']:
+            elif sec in ['diagnosis', 'metastasis', 'follow_up', 'local_recurrence']:
                 diagnosis.append(item)
 
         if treatments:
@@ -1128,6 +1169,9 @@ class DictionaryTransformer:
         if isinstance(val, list):
             # For lists, check if not empty and has at least one non-null value
             return len(val) > 0 and any(pd.notnull(v) for v in val)
+        elif isinstance(val, pd.Series):
+            # For Series, check if any values are non-null
+            return not val.empty and pd.notnull(val).any()
         else:
             # For single values, use pandas notnull check
             return pd.notnull(val)
@@ -1166,6 +1210,10 @@ class DictionaryTransformer:
             # group_df = self._sort_by_column(group_df, column=['patient_id', 'time_relative_sarcomaboard_presentation'], ascending=True)
                         
             patient_record['diagnosis_treatment_sequence'] = []
+            
+            # Collect diagnosis once from the first row (diagnosis is patient-level, not treatment-specific)
+            diagnosis_added = False
+            
             for idx, (index, row) in enumerate(group_df.iterrows(), start=1):
                              
                 for group, config in relevant_features['dynamic'].items():
@@ -1194,13 +1242,21 @@ class DictionaryTransformer:
                     if dict_tmp:
                         # Check flags for certain sections
                         should_include = False
-                        if group == 'surgery' and row.get('surgery_flag', None) == 1:
+                        
+                        # Diagnosis should only be added once from the first row
+                        if group == 'diagnosis' and not diagnosis_added:
+                            should_include = True
+                            diagnosis_added = True
+                        elif group == 'surgery' and row.get('surgery_flag', None) == 1:
                             should_include = True
                         elif group == 'systemic_therapy' and row.get('chemotherapy_flag', None) == 1:
                             should_include = True
-                        elif group in ['radiotherapy', 'radiotherapy_first'] and row.get('radiation_oncology_flag', None) == 1:
+                        elif group in ['radiotherapy'] and row.get('radiation_oncology_flag', None) == 1:
                             should_include = True
-                        elif group in ['diagnosis', 'radiology', 'events', 'recurrence_metastasis']:
+                        elif group in ['radiology', 'events', 'recurrence_metastasis']:
+                            should_include = True
+                        elif group in ['local_recurrence', 'metastasis', 'follow_up']:
+                            # New sections - always include if they have data
                             should_include = True
                         elif row.get('metastasis_flag', None) == 1:
                             should_include = True
@@ -1425,12 +1481,21 @@ class DictionaryTransformer:
         """
         def split_nested_values(value):
             """Helper function to split a value by separators and return as list or original value."""
-            if pd.isna(value):
-                return value
+            # Handle pandas Series objects (shouldn't normally occur but can happen with nested data)
+            if isinstance(value, pd.Series):
+                # If it's a Series with one element, extract the scalar value
+                if len(value) == 1:
+                    return split_nested_values(value.iloc[0])
+                # If it's a Series with multiple elements, convert to list and process
+                return [split_nested_values(item) for item in value.tolist()]
             
+            # Check for list first to avoid pd.isna() ambiguity with lists
             if isinstance(value, list):
                 # If already a list, recursively process each element
                 return [split_nested_values(item) for item in value]
+            
+            if pd.isna(value):
+                return value
             
             if isinstance(value, str):
                 # Check if value contains any of the separators
@@ -1635,6 +1700,14 @@ class FeatureExtractor:
         Returns:
         Union[int, float, Any]: The converted element.
         """
+        # Handle Series objects (shouldn't normally occur but can in nested data)
+        if isinstance(element, pd.Series):
+            if len(element) == 1:
+                element = element.iloc[0]
+            else:
+                # For multi-value Series, convert to list and process each element
+                return [self.convert_single_element(data_type, item) for item in element.tolist()]
+        
         if data_type == 'datetime':
             return self.parse_date(element) if pd.notnull(element) else None
         elif data_type == int:
@@ -2086,10 +2159,11 @@ class FeatureExtractor:
     def get_therapy_flag(self):
         #surgery_flag
         self.df['surgery_flag'] = self.df.apply(
-            lambda row: 1 if pd.notnull(row['type_surgery']) else 0,
+            lambda row: 1 if pd.notnull(row['surgery_indication']) else 0,
             axis=1
         )
-        self.relevant_features['dynamic']['surgery']['surgery_flag'] = 'surgery_flag'
+
+        self.relevant_features['dynamic']['surgery']['surgery_flag']='surgery_flag'
         self.data_type_mapping['surgery_flag'] = int
         
         #radiation_oncology_flag
@@ -2097,20 +2171,16 @@ class FeatureExtractor:
             lambda row: 1 if pd.notnull(row['radiotherapy_indication']) and row['radiotherapy_indication'] != 'no radiotherapy' else 0,
             axis=1
         )
+
         self.relevant_features['dynamic']['radiotherapy']['radiation_oncology_flag'] = 'radiation_oncology_flag'
         self.data_type_mapping['radiation_oncology_flag'] = int
         
         #chemotherapy_flag
-        self.df['chemotherapy_flag'] = self.df.apply(lambda row: 1 if pd.notnull(row['chemo_reason']) else 0, axis=1)
-        self.relevant_features['dynamic']['chemotherapy']['chemotherapy_flag'] = 'chemotherapy_flag'
+        self.df['chemotherapy_flag'] = self.df.apply(lambda row: 1 if pd.notnull(row['systemic_treatment_reason']) else 0, axis=1)
+
+        self.relevant_features['dynamic']["systemic_therapy"]['chemotherapy_flag'] = 'chemotherapy_flag'
         self.data_type_mapping['chemotherapy_flag'] = int
 
-        self.df['metastasis_flag'] = self.df.apply(
-            lambda row: 0 if (pd.isna(row['presence_metastasis']) or row['presence_metastasis'] == 0.0) else 1,
-            axis=1
-        )
-        self.relevant_features['dynamic']['metastasis']['metastasis_flag'] = 'metastasis_flag'
-        self.data_type_mapping['metastasis_flag'] = int
 
         return self
 
@@ -2164,11 +2234,21 @@ class FeatureExtractor:
         return self
 
     def time_range_in_episodes(self, start_date_col, end_date_col):
+        # Ensure both date columns are datetime type
+        self.df[start_date_col] = pd.to_datetime(self.df[start_date_col], errors='coerce')
+        self.df[end_date_col] = pd.to_datetime(self.df[end_date_col], errors='coerce')
+        
         months_diff = (self.df[start_date_col].dt.year - self.df[end_date_col].dt.year) * 12 + \
-                      (self.df[start_date_col].dt.month - self.df[end_date_col].dt.month)
-        return (months_diff / 6).astype(int)
+                  (self.df[start_date_col].dt.month - self.df[end_date_col].dt.month)
+        result = months_diff / 6
+        return result.fillna(0).replace([np.inf, -np.inf], 0).astype(int)
+
  
     def time_range_in_days(self, start_date_col, end_date_col):
+        # Ensure both date columns are datetime type
+        self.df[start_date_col] = pd.to_datetime(self.df[start_date_col], errors='coerce')
+        self.df[end_date_col] = pd.to_datetime(self.df[end_date_col], errors='coerce')
+        
         days_diff = (self.df[start_date_col] - self.df[end_date_col]).dt.days
         return days_diff
  
@@ -2204,8 +2284,194 @@ class FeatureExtractor:
         self.relevant_features['dynamic']['systemic_therapy']['fields'].append('systemic_timerange')    
         self.data_type_mapping['systemic_timerange'] = int
         return self
+
+    def get_episodes_radiotherapy(self):
+        
+        self.df["episodes_radiotherapy"]  = self.time_range_in_episodes('radiotherapy_start_date', 'date_pathology_report')
+
+        self.relevant_features['dynamic']['radiotherapy']['episodes_field'] = 'episodes_radiotherapy'
+        self.data_type_mapping['episodes_radiotherapy'] = int
+        return self
+
+    def get_radiotherapy_timerange(self):
+        
+        self.df["radiotherapy_timerange"]  = self.time_range_in_days('radiotherapy_end_date', 'radiotherapy_start_date')
+
+        self.relevant_features['dynamic']['radiotherapy']['fields'].append('radiotherapy_timerange')    
+        self.data_type_mapping['radiotherapy_timerange'] = int
+        return self
     
+    def get_merge_first_radio_into_main(self):
+        """
+        Merges first_radiotherapy_* columns into their corresponding radiotherapy_* columns.
+        For each patient, fills null values in the main columns with values from the first_* columns.
+        """
+        # Define column mappings
+        column_mappings = {
+            'first_radiotherapy_start_date': 'radiotherapy_start_date',
+            'first_radiotherapy_end_date': 'radiotherapy_end_date',
+            'first_radiotherapy_indication': 'radiotherapy_indication',
+            'first_radiotherapy_type': 'radiotherapy_type',
+            'first_radiotherapy_num_fractions': 'radiotherapy_num_fractions',
+            'first_radiotherapy_total_dose': 'radiotherapy_total_dose'
+        }
+        
+        # Merge each column pair
+        for first_col, main_col in column_mappings.items():
+            if first_col in self.df.columns and main_col in self.df.columns:
+                # Fill null values in main column with values from first_* column
+                self.df[main_col] = self.df[main_col].fillna(self.df[first_col])
+            elif first_col in self.df.columns:
+                # If main column doesn't exist, create it from first_* column
+                self.df[main_col] = self.df[first_col]
+        
+        return self
+        
     
+    def get_expand_local_recurrence(self):
+        """
+        Expands local recurrence data from numbered suffixes (_1, _2) into multiple rows.
+        Creates unified columns: date_local_recurrence, treatment_local_recurrence, date_local_recurrence_surgery
+        Preserves ALL patients - patients without recurrence get empty columns.
+        """
+        recurrence_columns = [
+            ('date_local_recurrence_1', 'treatment_local_recurrence_1', 'date_local_recurrence_surgery_1'),
+            ('date_local_recurrence_2', 'treatment_local_recurrence_2', 'date_local_recurrence_surgery_2')
+        ]
+        
+        expanded_rows = []
+        processed_indices = set()  # Track which patients have recurrence data
+        
+        for idx, row in self.df.iterrows():
+            has_recurrence = False
+            for date_col, treatment_col, surgery_col in recurrence_columns:
+                if date_col in self.df.columns and pd.notna(row[date_col]):
+                    has_recurrence = True
+                    new_row = row.copy()
+                    new_row['date_local_recurrence'] = row[date_col]
+                    new_row['treatment_local_recurrence'] = row.get(treatment_col) if treatment_col in self.df.columns else None
+                    new_row['date_local_recurrence_surgery'] = row.get(surgery_col) if surgery_col in self.df.columns else None
+                    expanded_rows.append(new_row)
+            
+            if has_recurrence:
+                processed_indices.add(idx)
+        
+        # Prepare columns to drop
+        cols_to_drop = [col for recurrence in recurrence_columns for col in recurrence if col in self.df.columns]
+        
+        if expanded_rows:
+            # Create DataFrame from expanded rows (patients WITH recurrence)
+            expanded_df = pd.DataFrame(expanded_rows)
+            expanded_df = expanded_df.drop(columns=cols_to_drop, errors='ignore')
+            
+            # Get patients WITHOUT recurrence data
+            patients_without_recurrence = self.df[~self.df.index.isin(processed_indices)].copy()
+            if not patients_without_recurrence.empty:
+                patients_without_recurrence['date_local_recurrence'] = None
+                patients_without_recurrence['treatment_local_recurrence'] = None
+                patients_without_recurrence['date_local_recurrence_surgery'] = None
+                patients_without_recurrence = patients_without_recurrence.drop(columns=cols_to_drop, errors='ignore')
+            
+            # Combine both: patients WITH recurrence + patients WITHOUT recurrence
+            self.df = pd.concat([expanded_df, patients_without_recurrence], ignore_index=True)
+        else:
+            # No recurrence data for ANY patient - create empty columns for all
+            self.df['date_local_recurrence'] = None
+            self.df['treatment_local_recurrence'] = None
+            self.df['date_local_recurrence_surgery'] = None
+        
+        return self
+    
+    def get_expand_metastasis(self):
+        """
+        Expands metastasis data from separate pulmonary/extrapulmonary columns into unified structure.
+        Creates columns: date_metastasis, metastasis_type, site_extrapulmonary_metastasis
+        Preserves ALL patients - patients without metastasis get empty columns.
+        """
+        expanded_rows = []
+        processed_indices = set()  # Track which patients have metastasis data
+        
+        for idx, row in self.df.iterrows():
+            has_metastasis = False
+            
+            # Handle pulmonary metastasis
+            if 'date_pulmonary_metastasis' in self.df.columns and pd.notna(row['date_pulmonary_metastasis']):
+                has_metastasis = True
+                new_row = row.copy()
+                new_row['date_metastasis'] = row['date_pulmonary_metastasis']
+                new_row['metastasis_type'] = 'pulmonary'
+                new_row['site_extrapulmonary_metastasis'] = None
+                expanded_rows.append(new_row)
+            
+            # Handle extrapulmonary metastasis
+            if 'date_extrapulmonary_metastasis' in self.df.columns and pd.notna(row['date_extrapulmonary_metastasis']):
+                has_metastasis = True
+                new_row = row.copy()
+                new_row['date_metastasis'] = row['date_extrapulmonary_metastasis']
+                new_row['metastasis_type'] = 'extrapulmonary'
+                new_row['site_extrapulmonary_metastasis'] = row.get('site_extrapulmonary_metastasis')
+                expanded_rows.append(new_row)
+            
+            if has_metastasis:
+                processed_indices.add(idx)
+        
+        # Prepare columns to drop
+        cols_to_drop = ['date_pulmonary_metastasis', 'date_extrapulmonary_metastasis']
+        
+        if expanded_rows:
+            # Create DataFrame from expanded rows (patients WITH metastasis)
+            expanded_df = pd.DataFrame(expanded_rows)
+            expanded_df = expanded_df.drop(columns=[col for col in cols_to_drop if col in expanded_df.columns], errors='ignore')
+            
+            # Get patients WITHOUT metastasis data
+            patients_without_metastasis = self.df[~self.df.index.isin(processed_indices)].copy()
+            if not patients_without_metastasis.empty:
+                patients_without_metastasis['date_metastasis'] = None
+                patients_without_metastasis['metastasis_type'] = None
+                if 'site_extrapulmonary_metastasis' not in patients_without_metastasis.columns:
+                    patients_without_metastasis['site_extrapulmonary_metastasis'] = None
+                patients_without_metastasis = patients_without_metastasis.drop(columns=[col for col in cols_to_drop if col in patients_without_metastasis.columns], errors='ignore')
+            
+            # Combine both: patients WITH metastasis + patients WITHOUT metastasis
+            self.df = pd.concat([expanded_df, patients_without_metastasis], ignore_index=True)
+        else:
+            # No metastasis data for ANY patient - create empty columns for all
+            self.df['date_metastasis'] = None
+            self.df['metastasis_type'] = None
+            if 'site_extrapulmonary_metastasis' not in self.df.columns:
+                self.df['site_extrapulmonary_metastasis'] = None
+        
+        return self
+    
+    def get_episodes_local_recurrence(self):
+        """
+        Creates episode numbers for local recurrence events based on date_local_recurrence.
+        """
+        self.df["episodes_local_recurrence"] = self.time_range_in_episodes('date_local_recurrence', 'date_pathology_report')
+        
+        self.relevant_features['dynamic']['local_recurrence']['episodes_field'] = 'episodes_local_recurrence'
+        self.data_type_mapping['episodes_local_recurrence'] = int
+        return self
+    
+    def get_episodes_metastasis(self):
+        """
+        Creates episode numbers for metastasis events based on date_metastasis.
+        """
+        self.df["episodes_metastasis"] = self.time_range_in_episodes('date_metastasis', 'date_pathology_report')
+        
+        self.relevant_features['dynamic']['metastasis']['episodes_field'] = 'episodes_metastasis'
+        self.data_type_mapping['episodes_metastasis'] = int
+        return self
+    
+    def get_episodes_follow_up(self):
+        """
+        Creates episode numbers for follow-up visits based on date_last_follow_up.
+        """
+        self.df["episodes_follow_up"] = self.time_range_in_episodes('date_last_follow_up', 'date_pathology_report')
+        
+        self.relevant_features['dynamic']['follow_up']['episodes_field'] = 'episodes_follow_up'
+        self.data_type_mapping['episodes_follow_up'] = int
+        return self
 
     def process_mc(self):
         return (self.get_age()
@@ -2238,7 +2504,15 @@ class FeatureExtractor:
                 .get_episodes_whoops()
                 .get_episodes_systemic()
                 .get_systemic_timerange()
-
+                .get_episodes_radiotherapy()
+                .get_radiotherapy_timerange()
+                .get_merge_first_radio_into_main()
+                .get_expand_local_recurrence()
+                .get_episodes_local_recurrence()
+                .get_expand_metastasis()
+                .get_episodes_metastasis()
+                .get_episodes_follow_up()
+                .get_therapy_flag()
                 .df)
     
     def post_process_frozen(self):

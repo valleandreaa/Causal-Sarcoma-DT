@@ -203,7 +203,7 @@ def merge_dataframes_on_id(df_main, df_radio, df_syst, key_column="PID"):
         )
 
         df_teil_events = df_teil.assign(
-            event_type="radiotherapy_first",
+            event_type="radiotherapy",
             event_date=df_teil.get("Start Radiotherapy (1. Teil)"),
             event_start_date=df_teil.get("Start Radiotherapy (1. Teil)"),
             event_end_date=df_teil.get("End Radiotherapy (1. Teil)"),
