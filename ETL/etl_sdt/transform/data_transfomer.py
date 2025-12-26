@@ -49,6 +49,60 @@ class DictionaryTransformer:
             val_tokens = set(str(val).lower().split())
             partial_tokens = set(str(partial).lower().split())
             return not val_tokens.isdisjoint(partial_tokens)
+        
+        def extract_code_and_text(text):
+            """Extract numeric/code prefix and diagnosis text from WHO codes."""
+            text_str = str(text).strip()
+            # Match patterns like "5.3.1.", "M.1.", "BL.0", "0 ", etc.
+            import re
+            code_match = re.match(r'^([0-9]+\.?[0-9]*\.?[0-9]*\.?|[A-Z]+\.[0-9]+\.?|[0-9]+)\s+', text_str)
+            if code_match:
+                code = code_match.group(1).strip('.')
+                text = text_str[code_match.end():].strip()
+                return code, text
+            return None, text_str
+        
+        def extract_base_code(text):
+            """Extract just the first letter and number (e.g., 'D18.4.' -> 'D18', 'B10.1' -> 'B10')."""
+            text_str = str(text).strip()
+            # Match letter followed by digits, ignoring dots and anything after
+            import re
+            base_match = re.match(r'^([A-Z]\d+)', text_str)
+            if base_match:
+                return base_match.group(1)
+            return None
+        
+        def has_code_match(val, partial):
+            """Match based on codes - first try base code (letter+number), then fall back to text."""
+            # Try matching base codes first (e.g., D18, B10, S12)
+            val_base = extract_base_code(val)
+            partial_base = extract_base_code(partial)
+            
+            if val_base and partial_base and val_base == partial_base:
+                return True
+            
+            # If base codes don't match or don't exist, try text matching
+            val_code, val_text = extract_code_and_text(val)
+            partial_code, partial_text = extract_code_and_text(partial)
+            
+            if val_text and partial_text:
+                val_text_lower = val_text.lower()
+                partial_text_lower = partial_text.lower()
+                
+                # Check substring match
+                if partial_text_lower in val_text_lower:
+                    return True
+                
+                # Check token overlap for multi-word descriptions
+                val_tokens = set(val_text_lower.split())
+                partial_tokens = set(partial_text_lower.split())
+                # Require significant overlap (more than 50% of partial tokens)
+                if len(partial_tokens) > 0:
+                    overlap = len(val_tokens & partial_tokens)
+                    if overlap / len(partial_tokens) > 0.5:
+                        return True
+            
+            return False
 
         for col, config in label_dict.items():
             mapping = config["mapping"]
@@ -60,13 +114,15 @@ class DictionaryTransformer:
                     partial_str = str(partial).lower()
                     if (
                         (mode == "substring" and partial_str in val_str) or
-                        (mode == "token" and has_token_overlap(val_str, partial_str))
+                        (mode == "token" and has_token_overlap(val_str, partial_str)) or
+                        (mode == "code" and has_code_match(str(val), str(partial)))
                     ):
                         return mapped
                 return None
 
             df[col] = df[col].apply(match)
         return df
+    
     def get_column_names(self, df):
         """
         Returns the column names of the DataFrame.
@@ -905,7 +961,7 @@ class DictionaryTransformer:
                         previous_episode = None
                         for prev_ep in reversed(episodes):
                             if prev_ep["treatments"] and any(
-                                t.get('section') not in ['diagnosis', 'metastasis'] or 
+                                t.get('section') not in ['diagnosis'] or 
                                 not t.get('_is_copied', False) for t in prev_ep["treatments"]
                             ):
                                 previous_episode = prev_ep
@@ -914,8 +970,8 @@ class DictionaryTransformer:
                         if previous_episode:
                             episode["treatments"] = []
                             for treatment in previous_episode["treatments"]:
-                                # Only copy diagnosis and metastasis sections
-                                if treatment.get('section') in ['diagnosis', 'metastasis']:
+                                # Only copy diagnosis sections
+                                if treatment.get('section') in ['diagnosis']:
                                     # Deep copy to preserve nested fields
                                     copied_treatment = copy.deepcopy(treatment)
                                     # Mark as copied and update dates (but keep original status)
@@ -987,10 +1043,12 @@ class DictionaryTransformer:
     def data_assembler(self, episode):
         # Group treatments by section and merge dictionaries for the same section
         treatments = episode.get("treatments", [])
-        episode["surgery"]      = 0
-        episode["chemotherapy"] = 0
-        episode["radiotherapy"] = 0
-        episode["metastasis"]   = 0
+        episode["surgery"]          = 0
+        episode["chemotherapy"]     = 0
+        episode["radiotherapy"]     = 0
+        episode["metastasis"]       = 0
+        episode["local_recurrence"] = 0
+        episode["final_status"]     = 0
         
         # Always initialize diagnosis as an empty array
         episode["diagnosis"] = []
@@ -1003,6 +1061,10 @@ class DictionaryTransformer:
                 # Count systemic_therapy as chemotherapy
                 if section == "systemic_therapy":
                     episode["chemotherapy"] = 1
+                elif section == "local_recurrence":
+                    episode["local_recurrence"] = 1
+                elif section == "follow_up":
+                    episode["final_status"] = 1
                 elif section in ["surgery", "chemotherapy", "radiotherapy", "metastasis"]:
                     episode[section] = 1
                 if section is not None:
@@ -1019,11 +1081,24 @@ class DictionaryTransformer:
                                     # If both values are dicts, merge them recursively
                                     if isinstance(merged[section][key], dict) and isinstance(value, dict):
                                         merged_val = merged[section][key].copy()
-                                        merged_val.update(value)
+                                        # Recursively merge the nested dict
+                                        for nested_key, nested_value in value.items():
+                                            if nested_key in merged_val:
+                                                # If both nested values are lists, deduplicate when merging
+                                                if isinstance(merged_val[nested_key], list) and isinstance(nested_value, list):
+                                                    # Combine and remove duplicates while preserving order
+                                                    combined = merged_val[nested_key] + nested_value
+                                                    merged_val[nested_key] = list(dict.fromkeys(combined))
+                                                else:
+                                                    merged_val[nested_key] = nested_value
+                                            else:
+                                                merged_val[nested_key] = nested_value
                                         merged[section][key] = merged_val
-                                    # If both values are lists, concatenate them (last one takes precedence if needed)
+                                    # If both values are lists, concatenate and remove duplicates
                                     elif isinstance(merged[section][key], list) and isinstance(value, list):
-                                        merged[section][key] = merged[section][key] + value
+                                        # Combine lists and remove duplicates while preserving order
+                                        combined = merged[section][key] + value
+                                        merged[section][key] = list(dict.fromkeys(combined))
                                     else:
                                         # In case of conflict, keep the value from the current treatment (last one)
                                         merged[section][key] = value
@@ -1253,10 +1328,14 @@ class DictionaryTransformer:
                             should_include = True
                         elif group in ['radiotherapy'] and row.get('radiation_oncology_flag', None) == 1:
                             should_include = True
+                        elif group == 'local_recurrence' and row.get('local_recurrence_flag', None) == 1:
+                            should_include = True
+                        elif group == 'follow_up' and row.get('final_status_flag', None) == 1:
+                            should_include = True
                         elif group in ['radiology', 'events', 'recurrence_metastasis']:
                             should_include = True
-                        elif group in ['local_recurrence', 'metastasis', 'follow_up']:
-                            # New sections - always include if they have data
+                        elif group in ['metastasis']:
+                            # Metastasis - always include if it has data
                             should_include = True
                         elif row.get('metastasis_flag', None) == 1:
                             should_include = True
@@ -1499,11 +1578,11 @@ class DictionaryTransformer:
             
             if isinstance(value, str):
                 # Check if value contains any of the separators
-                if ';' in value or '/' in value or '|' in value:
+                if ';' in value or '|' in value:
                     # Split by any of the separators and clean up whitespace
                     # Use regex to split by multiple separators
                     import re
-                    parts = re.split(r'[;/|]', value)
+                    parts = re.split(r'[;|]', value)
                     # Strip whitespace from each part and remove empty strings
                     cleaned_parts = [part.strip() for part in parts if part.strip()]
                     # Return as list if we have multiple parts, otherwise return single value
@@ -2181,6 +2260,24 @@ class FeatureExtractor:
         self.relevant_features['dynamic']["systemic_therapy"]['chemotherapy_flag'] = 'chemotherapy_flag'
         self.data_type_mapping['chemotherapy_flag'] = int
 
+        #local_recurrence_flag
+        self.df['local_recurrence_flag'] = self.df.apply(
+            lambda row: 1 if pd.notnull(row['date_local_recurrence']) else 0,
+            axis=1
+        )
+
+        self.relevant_features['dynamic']['local_recurrence']['local_recurrence_flag'] = 'local_recurrence_flag'
+        self.data_type_mapping['local_recurrence_flag'] = int
+
+        #final_status_flag
+        self.df['final_status_flag'] = self.df.apply(
+            lambda row: 1 if pd.notnull(row['last_status']) else 0,
+            axis=1
+        )
+
+        self.relevant_features['dynamic']['follow_up']['final_status_flag'] = 'final_status_flag'
+        self.data_type_mapping['final_status_flag'] = int
+
 
         return self
 
@@ -2218,7 +2315,10 @@ class FeatureExtractor:
         """
         # Defragment DataFrame to avoid performance warning
         self.df = self.df.copy()
-        self.df['initial_size'] = (self.df['size_a_mm']**2 + self.df['size_b_mm']**2 + self.df['size_c_mm']**2)**0.5
+        sizes = self.df[['size_a_mm', 'size_b_mm', 'size_c_mm']]
+
+        self.df['initial_size'] = np.sqrt(sizes.pow(2).sum(axis=1, min_count=1))
+
         self.relevant_features['static']['tumor_characteristics'].append('initial_size')
         self.data_type_mapping['initial_size'] = int
         return self
@@ -2244,12 +2344,30 @@ class FeatureExtractor:
         return result.fillna(0).replace([np.inf, -np.inf], 0).astype(int)
 
  
-    def time_range_in_days(self, start_date_col, end_date_col):
+    def time_range_in_days(self, start_date_col, end_date_col, max_days=None):
         # Ensure both date columns are datetime type
         self.df[start_date_col] = pd.to_datetime(self.df[start_date_col], errors='coerce')
         self.df[end_date_col] = pd.to_datetime(self.df[end_date_col], errors='coerce')
         
         days_diff = (self.df[start_date_col] - self.df[end_date_col]).dt.days
+        
+        # Apply threshold if specified
+        if max_days is not None:
+            # Log warnings for values exceeding threshold
+            excessive_mask = days_diff > max_days
+            if excessive_mask.any():
+                excessive_count = excessive_mask.sum()
+                max_val = days_diff[excessive_mask].max()
+                logger.warning(f"{start_date_col}: Found {excessive_count} rows with duration >{max_days} days (max={max_val}). Setting to None.")
+                days_diff = days_diff.where(~excessive_mask, None)
+            
+            # Also check for negative durations
+            negative_mask = days_diff < 0
+            if negative_mask.any():
+                negative_count = negative_mask.sum()
+                logger.warning(f"{start_date_col}: Found {negative_count} rows with negative duration. Setting to None.")
+                days_diff = days_diff.where(~negative_mask, None)
+        
         return days_diff
  
 
@@ -2279,7 +2397,7 @@ class FeatureExtractor:
     
     def get_systemic_timerange(self):
         
-        self.df["systemic_timerange"]  = self.time_range_in_days('cycle_end_date', 'cycle_start_date')
+        self.df["systemic_timerange"]  = self.time_range_in_days('cycle_end_date', 'cycle_start_date', max_days=90)
 
         self.relevant_features['dynamic']['systemic_therapy']['fields'].append('systemic_timerange')    
         self.data_type_mapping['systemic_timerange'] = int
@@ -2295,7 +2413,7 @@ class FeatureExtractor:
 
     def get_radiotherapy_timerange(self):
         
-        self.df["radiotherapy_timerange"]  = self.time_range_in_days('radiotherapy_end_date', 'radiotherapy_start_date')
+        self.df["radiotherapy_timerange"]  = self.time_range_in_days('radiotherapy_end_date', 'radiotherapy_start_date', max_days=90)
 
         self.relevant_features['dynamic']['radiotherapy']['fields'].append('radiotherapy_timerange')    
         self.data_type_mapping['radiotherapy_timerange'] = int
@@ -2473,6 +2591,15 @@ class FeatureExtractor:
         self.data_type_mapping['episodes_follow_up'] = int
         return self
 
+    def remove_duplicates_drug_names(self):
+        def remove_duplicates(val):
+            if isinstance(val, list):
+                return list(set(val))
+            return val
+
+        self.df['drug_name'] = self.df['drug_name'].apply(remove_duplicates)
+        return self
+
     def process_mc(self):
         return (self.get_age()
                 .get_single_sarcomaboard_date()
@@ -2513,6 +2640,7 @@ class FeatureExtractor:
                 .get_episodes_metastasis()
                 .get_episodes_follow_up()
                 .get_therapy_flag()
+                .remove_duplicates_drug_names()
                 .df)
     
     def post_process_frozen(self):

@@ -63,6 +63,8 @@ def convert_numpy_types(record):
         return {key: convert_numpy_types(value) for key, value in record.items()}
     elif isinstance(record, list):
         return [convert_numpy_types(item) for item in record]
+    elif pd.isna(record):  # Handle NaN, NaT, and None
+        return None
     elif isinstance(record, (np.integer, np.floating)):
         return record.item()
     elif isinstance(record, np.ndarray):
@@ -72,7 +74,7 @@ def convert_numpy_types(record):
 
 
 def upsert_record(record, collection):
-    try:
+    # try:
         record = convert_numpy_types(record)  # Convert numpy types before upserting
         query = {"_id": record["_id"]}
         update = {"$set": record}
@@ -82,8 +84,8 @@ def upsert_record(record, collection):
             logger.info(f"Inserted new document with _id: {result.upserted_id}")
         else:
             logger.info(f"Updated existing document with _id: {record['_id']}")
-    except Exception as e:
-        logger.error(f"Failed to upsert record with _id: {record['_id']}. Error: {e}")
+    # except Exception as e:
+    #     logger.error(f"Failed to upsert record with _id: {record['_id']}. Error: {e}")
 
 
 def main(file_path, preview=False, dry_run=False, preview_n=5, delete_collection=False, timeline=False):

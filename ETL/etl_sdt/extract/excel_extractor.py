@@ -216,12 +216,14 @@ def merge_dataframes_on_id(df_main, df_radio, df_syst, key_column="PID"):
     # merge events with main patient table
     # -----------------------------
     # (use df_main PID column name on the right; you said df_main has Patient ID (PID))
+    # Use 'outer' join to ensure all patients from df_main are included,
+    # even if they have no radiotherapy or systemic therapy events
     if "patient_id" in df_main.columns:
         df_events_merged = events_df.merge(
             df_main,
             left_on=key_column,
             right_on="patient_id",
-            how="left",
+            how="outer",
         )
     else:
         df_main = df_main.rename(
@@ -231,7 +233,7 @@ def merge_dataframes_on_id(df_main, df_radio, df_syst, key_column="PID"):
             df_main,
             left_on=key_column,
             right_on="Patient ID (PID)",
-            how="left",
+            how="outer",
         )
 
 
