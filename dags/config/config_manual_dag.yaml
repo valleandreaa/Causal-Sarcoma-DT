@@ -1,0 +1,244 @@
+# Configuration for building DAG from MongoDB data
+# Compatible with MongoExtractor from Models/utils/helpers.py
+
+# MongoDB Connection Settings
+mongodb:
+  connection_string: "${MONGO_URI}"  # Environment variable for MongoDB URI
+  database_name: "${MONGO_DB}"       # Environment variable for database name
+  collection_name: "${MONGO_COLLECTION}"  # Environment variable for collection name
+
+# MongoDB Query Configuration
+# This follows the MongoExtractor's data_config structure
+query:
+  # MongoDB aggregation pipeline for data extraction
+  # The aggregator will be used by MongoExtractor.fetch_data()
+  aggregator:
+    - $match:
+        # Add your filters here, e.g., date ranges, patient criteria
+        # Example: { "date": { "$gte": "2020-01-01" } }
+        {}
+    
+    - $project:
+        # Specify which fields to include in the output
+        # These should match your DAG nodes
+        _id: 1
+        patient_id: "$_id"
+        age: 1
+        gender: 1
+        tumor_size: 1
+        tumor_grade: 1
+        histological_subtype: 1
+        treatment_type: 1
+        surgery_performed: 1
+        chemotherapy: 1
+        radiotherapy: 1
+        metastasis: 1
+        recurrence: 1
+        survival_status: 1
+        survival_time: 1
+    
+    - $limit: 1000  # Optional: limit number of records for testing
+
+  # Fields to extract from query results
+  fields:
+    - patient_id
+    - age
+    - gender
+    - tumor_size
+    - tumor_grade
+    - histological_subtype
+    - treatment_type
+    - surgery_performed
+    - chemotherapy
+    - radiotherapy
+    - metastasis
+    - recurrence
+    - survival_status
+    - survival_time
+
+# DAG Specification
+dag:
+  graph_type: "dag"  # Options: "dag", "cpdag", "pag"
+  
+  # Node definitions (variables in the causal graph)
+  nodes:
+    - age
+    - gender
+    - tumor_size
+    - tumor_grade
+    - histological_subtype
+    - treatment_type
+    - surgery_performed
+    - chemotherapy
+    - radiotherapy
+    - metastasis
+    - recurrence
+    - survival_status
+    - survival_time
+  
+  # Edge definitions (causal relationships)
+  # Format: [source, target]
+  edges:
+    # Baseline patient characteristics
+    - [age, tumor_grade]
+    - [age, treatment_type]
+    - [age, survival_time]
+    
+    - [gender, tumor_size]
+    - [gender, treatment_type]
+    
+    # Tumor characteristics influence treatment decisions
+    - [tumor_size, treatment_type]
+    - [tumor_size, surgery_performed]
+    - [tumor_size, metastasis]
+    
+    - [tumor_grade, treatment_type]
+    - [tumor_grade, metastasis]
+    - [tumor_grade, survival_time]
+    
+    - [histological_subtype, treatment_type]
+    - [histological_subtype, tumor_grade]
+    
+    # Treatment decisions
+    - [treatment_type, surgery_performed]
+    - [treatment_type, chemotherapy]
+    - [treatment_type, radiotherapy]
+    
+    # Treatment effects
+    - [surgery_performed, metastasis]
+    - [surgery_performed, recurrence]
+    - [surgery_performed, survival_status]
+    
+    - [chemotherapy, metastasis]
+    - [chemotherapy, survival_status]
+    - [chemotherapy, survival_time]
+    
+    - [radiotherapy, recurrence]
+    - [radiotherapy, survival_status]
+    
+    # Disease progression
+    - [metastasis, survival_status]
+    - [metastasis, survival_time]
+    
+    - [recurrence, survival_status]
+    - [recurrence, survival_time]
+    
+    # Final outcomes
+    - [survival_status, survival_time]
+  
+  # Optional: Node metadata (variable types, descriptions, etc.)
+  node_metadata:
+    age:
+      type: "continuous"
+      description: "Patient age at diagnosis"
+      unit: "years"
+    
+    gender:
+      type: "binary"
+      description: "Patient gender"
+      categories: ["male", "female"]
+    
+    tumor_size:
+      type: "continuous"
+      description: "Tumor size"
+      unit: "cm"
+    
+    tumor_grade:
+      type: "ordinal"
+      description: "Tumor grade"
+      categories: ["low", "intermediate", "high"]
+    
+    histological_subtype:
+      type: "categorical"
+      description: "Histological subtype of sarcoma"
+    
+    treatment_type:
+      type: "categorical"
+      description: "Primary treatment approach"
+    
+    surgery_performed:
+      type: "binary"
+      description: "Whether surgery was performed"
+    
+    chemotherapy:
+      type: "binary"
+      description: "Whether chemotherapy was administered"
+    
+    radiotherapy:
+      type: "binary"
+      description: "Whether radiotherapy was administered"
+    
+    metastasis:
+      type: "binary"
+      description: "Presence of metastasis"
+    
+    recurrence:
+      type: "binary"
+      description: "Disease recurrence"
+    
+    survival_status:
+      type: "binary"
+      description: "Patient survival status"
+      categories: ["alive", "deceased"]
+    
+    survival_time:
+      type: "continuous"
+      description: "Survival time from diagnosis"
+      unit: "months"
+  
+  # Optional: Edge metadata (confidence, strength, etc.)
+  edge_metadata:
+    tumor_size->metastasis:
+      strength: "strong"
+      evidence: "clinical literature"
+    
+    chemotherapy->survival_time:
+      strength: "moderate"
+      evidence: "observational data"
+
+# Output Configuration
+output:
+  # Where to save the generated DAG
+  dag_json: "../output/manual_dag.json"
+  dag_graphml: "../output/manual_dag.graphml"
+  dag_dot: "../output/manual_dag.dot"
+  dag_png: "../output/manual_dag.png"
+  
+  # Where to save the processed data
+  processed_data: "../output/processed_data.csv"
+  
+  # Validation report
+  validation_report: "../output/dag_validation_report.txt"
+
+# Validation Settings
+validation:
+  # Check for cycles in the DAG
+  check_acyclic: true
+  
+  # Validate nodes exist in the data
+  validate_schema: true
+  
+  # Check for required constraints
+  enforce_constraints: false
+  
+  # Minimum required samples
+  min_samples: 50
+
+# Data Processing Settings
+data_processing:
+  # Handle missing values
+  handle_missing: true
+  missing_strategy: "drop"  # Options: "drop", "impute", "flag"
+  
+  # Feature encoding
+  encode_categoricals: true
+  encoding_method: "label"  # Options: "label", "onehot"
+  
+  # Normalization
+  normalize: false
+  normalization_method: "standard"  # Options: "standard", "minmax"
+
+# Logging
+logging:
+  level: "INFO"  # Options: "DEBUG", "INFO", "WARNING", "ERROR"
+  log_file: "../logs/dag_creation.log"

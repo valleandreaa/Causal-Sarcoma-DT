@@ -4,7 +4,7 @@ FROM python:3.12
 # set the working directory
 WORKDIR /app
 
-# check if i need to remove something here
+# check if i need to remove something hereC 
 COPY requirements.txt /app/requirements.txt
 COPY etl_sdt/ /app/etl_sdt
 COPY data/ /app/data

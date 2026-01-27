@@ -10,7 +10,7 @@
 /Models/backup/*
 /Models/checkpoints/*
 /Models/runs/*
-
+/dags/output
 /output/*
 /*.csv
 /*.txt
