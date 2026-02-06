@@ -1,0 +1,98 @@
+# Configuration for DAG Structure Learning
+
+# =============================================================================
+# Data Source Configuration
+# =============================================================================
+
+# MongoDB Configuration (used when --mongodb flag is set)
+mongodb:
+  # Connection details (can also use environment variables: MONGO_URI, MONGO_DB, MONGO_COLLECTION)
+  uri: "mongodb://localhost:27017/"
+  database: "sarcoma_dt"
+  collection: "patients"
+  
+  # MongoDB query (empty {} means fetch all documents)
+  query: {}
+  
+  # Optional: projection to limit fields returned
+  projection: null
+  
+  # Include MongoDB _id field in DataFrame
+  include_id: false
+
+# =============================================================================
+# Feature Selection
+# =============================================================================
+
+features:
+  # Explicitly include only these features (if specified, all others are excluded)
+  include:
+    - gender
+    - institution
+    - biopsy_grading
+    - who_diagnosis_code
+    - anatomic_region_code
+    - anatomic_region_grouping
+    - anatomic_region_side
+    - metastasis_present_at_diagnosis
+  
+  # Exclude specific features (applied after include)
+  exclude: []
+
+# =============================================================================
+# Causal Constraints
+# =============================================================================
+
+constraints:
+  # Edge constraints
+  edges:
+    # Required edges (must be present in learned DAG)
+    required:
+      - [gender, biopsy_grading]
+      - [biopsy_grading, metastasis_present_at_diagnosis]
+      - [who_diagnosis_code, metastasis_present_at_diagnosis]
+    
+    # Forbidden edges (must not be present in learned DAG)
+    forbidden:
+      - [metastasis_present_at_diagnosis, gender]
+      - [metastasis_present_at_diagnosis, institution]
+      - [metastasis_present_at_diagnosis, biopsy_grading]
+  
+  # Tier constraints (temporal ordering)
+  tiers:
+    # Map each node to a tier number (lower tiers cannot be caused by higher tiers)
+    node_to_tier:
+      # Tier 0: baseline immutable factors
+      gender: 0
+      institution: 0
+      
+      # Tier 1: diagnostic measurements
+      biopsy_grading: 1
+      who_diagnosis_code: 1
+      anatomic_region_code: 1
+      
+      # Tier 2: derived features
+      anatomic_region_grouping: 2
+      anatomic_region_side: 2
+      
+      # Tier 3: outcome
+      metastasis_present_at_diagnosis: 3
+    
+    # Allow edges within the same tier
+    allow_intra_tier_edges: false
+
+# =============================================================================
+# Algorithm Configuration
+# =============================================================================
+
+algorithm:
+  # Structure learning method: pc, pc_stable, or ges
+  method: pc
+  
+  # PC algorithm settings
+  variant: stable
+  ci_test: chi_square  # Options: chi_square, g_square, log_likelihood, freeman_tuckey, modified_log_likelihood, neyman, cressie_read
+  significance_level: 0.05
+  
+  # GES algorithm settings (used when method=ges)
+  scoring_method: bic  # Options: bic, aic, bdeu, bds, k2

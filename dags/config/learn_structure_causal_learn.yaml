@@ -1,0 +1,56 @@
+# Configuration for learning DAG structure using causal-learn PC algorithm
+
+# MongoDB connection
+mongodb:
+  uri: "mongodb://localhost:27017"
+  database: "sarcoma_db"
+  collection: "patients"
+  # Optional: aggregation pipeline for data preprocessing
+  pipeline: []
+
+# Feature selection
+features:
+  include:
+    - gender
+    - age
+    - biopsy_grading
+    - who_diagnosis_code
+    - anatomic_region_code
+    - anatomic_region_grouping
+    - metastasis_present_at_diagnosis
+
+# Variable types for appropriate CI test selection
+variable_types:
+  gender: categorical
+  age: numerical
+  biopsy_grading: categorical
+  who_diagnosis_code: numerical
+  anatomic_region_code: numerical
+  anatomic_region_grouping: categorical
+  metastasis_present_at_diagnosis: categorical
+
+# Algorithm settings
+algorithm:
+  method: pc_causal_learn  # Use causal-learn implementation
+  significance_level: 0.15
+  # indep_test will be auto-selected based on variable_types:
+  # - fisherz for numerical/mixed data
+  # - chisq for categorical data
+
+# Constraints (optional)
+constraints:
+  edges:
+    required:
+      - [gender, biopsy_grading]
+    forbidden:
+      - [metastasis_present_at_diagnosis, gender]
+  tiers:
+    node_to_tier:
+      gender: 0
+      age: 0
+      biopsy_grading: 1
+      who_diagnosis_code: 1
+      anatomic_region_code: 1
+      anatomic_region_grouping: 1
+      metastasis_present_at_diagnosis: 2
+    allow_intra_tier_edges: true

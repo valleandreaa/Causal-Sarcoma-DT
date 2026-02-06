@@ -1,0 +1,59 @@
+# Configuration for learning DAG from CSV file
+
+# =============================================================================
+# Feature Selection
+# =============================================================================
+
+features:
+  # Include only these features from CSV
+  include:
+    - gender
+    - institution
+    - biopsy_grading
+    - who_diagnosis_code
+    - anatomic_region_code
+    - anatomic_region_grouping
+    - anatomic_region_side
+    - metastasis_present_at_diagnosis
+  
+  # Exclude specific features
+  exclude: []
+
+# =============================================================================
+# Causal Constraints
+# =============================================================================
+
+constraints:
+  edges:
+    required:
+      - [gender, biopsy_grading]
+      - [biopsy_grading, metastasis_present_at_diagnosis]
+      - [who_diagnosis_code, metastasis_present_at_diagnosis]
+    
+    forbidden:
+      - [metastasis_present_at_diagnosis, gender]
+      - [metastasis_present_at_diagnosis, institution]
+      - [metastasis_present_at_diagnosis, biopsy_grading]
+  
+  tiers:
+    node_to_tier:
+      gender: 0
+      institution: 0
+      biopsy_grading: 1
+      who_diagnosis_code: 1
+      anatomic_region_code: 1
+      anatomic_region_grouping: 2
+      anatomic_region_side: 2
+      metastasis_present_at_diagnosis: 3
+    
+    allow_intra_tier_edges: false
+
+# =============================================================================
+# Algorithm Configuration
+# =============================================================================
+
+algorithm:
+  method: pc
+  variant: stable
+  ci_test: chi_square
+  significance_level: 0.05
