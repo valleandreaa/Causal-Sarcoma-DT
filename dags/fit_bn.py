@@ -151,8 +151,15 @@ def _apply_rebalancing(df: pd.DataFrame, target_column: str = 'local_recurrence'
     return df_balanced
 
 
-def _validate_and_clean_data(df: pd.DataFrame, dag_nodes: list[str]) -> pd.DataFrame:
-    """Validate and clean data for Bayesian network fitting."""
+def _validate_and_clean_data(df: pd.DataFrame, dag_nodes: list[str], binning_config: dict = None) -> pd.DataFrame:
+    """Validate and clean data for Bayesian network fitting.
+    
+    Args:
+        df: Input dataframe
+        dag_nodes: List of nodes in the DAG
+        binning_config: Dictionary mapping column names to binning parameters
+                       e.g., {'column_name': {'n_bins': 5, 'method': 'quantile'}}
+    """
     print(f"\nValidating and cleaning data...")
     print(f"Initial data shape: {df.shape}")
     print(f"Data columns: {list(df.columns)}")
@@ -201,6 +208,22 @@ def _validate_and_clean_data(df: pd.DataFrame, dag_nodes: list[str]) -> pd.DataF
                 df[col] = pd.Categorical(df[col]).codes
                 print(f"  {col}: converted object to categorical codes")
         
+        # Apply explicit binning config first (even if values are integer-like).
+        if binning_config and col in binning_config:
+            n_bins = binning_config[col].get('n_bins', 5)
+            method = binning_config[col].get('method', 'quantile')
+            numeric_col = pd.to_numeric(df[col], errors='coerce')
+            if numeric_col.isnull().any():
+                raise ValueError(
+                    f"Column {col} is configured for binning but contains non-numeric values."
+                )
+            print(f"  {col}: discretizing into {n_bins} bins (method: {method}) from config")
+            if method == 'quantile':
+                df[col] = pd.qcut(numeric_col, q=n_bins, labels=False, duplicates='drop')
+            else:  # uniform
+                df[col] = pd.cut(numeric_col, bins=n_bins, labels=False, duplicates='drop')
+            continue
+
         # Now ensure everything is an integer type
         if pd.api.types.is_numeric_dtype(df[col]):
             if not pd.api.types.is_integer_dtype(df[col]):
@@ -210,8 +233,19 @@ def _validate_and_clean_data(df: pd.DataFrame, dag_nodes: list[str]) -> pd.DataF
                     print(f"  {col}: converted float to int")
                 else:
                     # If not whole numbers, discretize
-                    print(f"  Warning: {col} has non-integer values, discretizing...")
-                    df[col] = pd.cut(df[col], bins=10, labels=False, duplicates='drop')
+                    # Get binning config for this column (default to 5 bins with quantile method)
+                    if binning_config and col in binning_config:
+                        n_bins = binning_config[col].get('n_bins', 5)
+                        method = binning_config[col].get('method', 'quantile')
+                    else:
+                        n_bins = 5
+                        method = 'quantile'
+                    
+                    print(f"  Warning: {col} has non-integer values, discretizing into {n_bins} bins (method: {method})...")
+                    if method == 'quantile':
+                        df[col] = pd.qcut(df[col], q=n_bins, labels=False, duplicates='drop')
+                    else:  # uniform
+                        df[col] = pd.cut(df[col], bins=n_bins, labels=False, duplicates='drop')
             else:
                 print(f"  {col}: already integer")
         elif pd.api.types.is_bool_dtype(df[col]):
@@ -285,7 +319,8 @@ def main() -> None:
     dag = DAGSerializer.load_json(args.dag)
     
     # Validate and clean data to match DAG nodes
-    data = _validate_and_clean_data(data, list(dag.nodes))
+    binning_config = config.get('binning', {})
+    data = _validate_and_clean_data(data, list(dag.nodes), binning_config)
     
     # Split into train and test sets BEFORE rebalancing
     print(f"\n{'='*60}")
