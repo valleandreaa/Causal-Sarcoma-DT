@@ -1146,6 +1146,7 @@ class DictionaryTransformer:
             "radiotherapy_preoperative": 0,
             "any_metastasis":            0,
             "any_local_recurrence":      0,
+            "any_whoops":                0,
             "dod":                       0,
         }
 
@@ -1213,6 +1214,17 @@ class DictionaryTransformer:
                     if is_preoperative:
                         treatments["radiotherapy_preoperative"] = 1
                         break
+
+            # WHOOPS detection: if any treatment in the episode contains WHOOPS evidence, set flag
+            # Check for explicit `whoops` flag or presence of WHOOPS-specific fields
+            for tr in episode.get("treatments", []):
+                if tr.get("whoops", 0) == 1:
+                    treatments["any_whoops"] = 1
+                    break
+                if any(pd.notnull(tr.get(f)) for f in ("date_whoops", "whoops_margin_status", "whoops_surgery_institution")):
+                    treatments["any_whoops"] = 1
+                    break
+
             # DOD is stored in the diagnosis list under section "follow_up"
             for diag in episode.get("diagnosis", []):
                 if (diag.get("section") == "follow_up" and
