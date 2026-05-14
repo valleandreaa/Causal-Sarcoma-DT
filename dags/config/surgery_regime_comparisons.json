@@ -1,0 +1,102 @@
+{
+  "description": "Surgery-based treatment regime comparisons for soft tissue sarcoma",
+  "comparisons": [
+    {
+      "regime_a": {
+        "surgery": 1,
+        "radiotherapy": 0,
+        "chemotherapy": 0,
+        "treatments.pathologist_margin_judgement": 0
+      },
+      "regime_b": {
+        "surgery": 1,
+        "radiotherapy": 1,
+        "chemotherapy": 0,
+        "treatments.pathologist_margin_judgement": 0
+      },
+      "label": "Surgery only vs Surgery + R0 + RT",
+      "sensitivity_conditions": {
+        "tumor_characteristics.metastasis_present_at_diagnosis": [0],
+        "tumor_characteristics.biopsy_grading": [1,2,3],
+        "tumor_characteristics.initial_size": [1,4],
+        "tumor_characteristics.extremity_tumor": [0, 1],
+        "general.age":  [2]
+      }
+    },
+     {
+      "regime_a": {
+        "surgery": 1,
+        "radiotherapy": 0,
+        "chemotherapy": 0,
+        "treatments.pathologist_margin_judgement": 2
+      },
+      "regime_b": {
+        "surgery": 1,
+        "radiotherapy": 1,
+        "chemotherapy": 0,
+        "treatments.pathologist_margin_judgement": 2
+      },
+      "label": "Surgery only vs Surgery + R0 + RT",
+      "sensitivity_conditions": {
+        "tumor_characteristics.metastasis_present_at_diagnosis": [0],
+        "tumor_characteristics.biopsy_grading": [1,2,3],
+        "tumor_characteristics.initial_size": [1,4],
+        "tumor_characteristics.extremity_tumor": [0, 1],
+        "general.age":  [2]
+      }
+    },
+    {
+      "regime_a": {
+        "surgery": 1,
+        "radiotherapy": 1,
+        "chemotherapy": 0,
+        "treatments.pathologist_margin_judgement": 0
+      },
+      "regime_b": {
+        "surgery": 1,
+        "radiotherapy": 1,
+        "chemotherapy": 1,
+        "treatments.pathologist_margin_judgement": 1
+      },
+      "label": "Surgery only vs Surgery + R0 + RT",
+      "sensitivity_conditions": {
+        "tumor_characteristics.metastasis_present_at_diagnosis": [1],
+        "tumor_characteristics.biopsy_grading": [3],
+        "tumor_characteristics.initial_size": [1,4],
+        "tumor_characteristics.extremity_tumor": [0, 1],
+        "general.age":  [
+          1,3]
+      }},
+{
+      "regime_a": {
+        "surgery": 1,
+        "radiotherapy": 1,
+        "chemotherapy": 0,
+        "treatments.pathologist_margin_judgement": 1
+      },
+      "regime_b": {
+        "surgery": 1,
+        "radiotherapy": 1,
+        "chemotherapy": 1,
+        "treatments.pathologist_margin_judgement": 1
+      },
+      "label": "Surgery only vs Surgery + R0 + RT",
+      "sensitivity_conditions": {
+        "tumor_characteristics.metastasis_present_at_diagnosis": [1],
+        "tumor_characteristics.biopsy_grading": [3],
+        "tumor_characteristics.initial_size": [1,4],
+        "tumor_characteristics.extremity_tumor": [0, 1],
+        "general.age":  [
+          1,3]
+      }
+    }
+  ],
+  "notes": [
+    "Surgery is the baseline treatment for localized soft tissue sarcoma",
+    "Radiotherapy is typically given adjuvantly to reduce local recurrence",
+    "Chemotherapy may be considered for high-grade, large (>5cm) tumors",
+    "The optimal regime depends on tumor characteristics (grade, size, location, margins)",
+    "sensitivity_conditions: Baseline conditions to cross - analysis runs for all combinations",
+    "Example: metastasis=[0,1] and grade=[1,2,3] creates 6 subgroups"
+  ]
+}

@@ -9,7 +9,7 @@ import os
 from etl_sdt.extract.pdf_extractor import extract_text_from_pdf
 import unicodedata
 # from langdetect import detect
-from datetime import datetime
+from datetime import datetime, timezone
 from dateutil.relativedelta import relativedelta
 from typing import Any, List, Dict, Union
 from etl_sdt.utils.logging_config import logger
@@ -105,6 +105,11 @@ class DictionaryTransformer:
             return False
 
         for col, config in label_dict.items():
+            # Some label dictionaries may contain optional or stale keys
+            # that are not present in the current dataframe.
+            if col not in df.columns:
+                continue
+
             mapping = config["mapping"]
             mode = config.get("mode", "substring")
 
@@ -709,6 +714,36 @@ class DictionaryTransformer:
         list: A list of dictionaries, each representing a patient record.
         """
 
+        def get_first_valid_date_value(value):
+            """Return a scalar date-like value usable by episode parsing, else None."""
+            if isinstance(value, dict):
+                if "$date" in value:
+                    return value
+                return None
+
+            if isinstance(value, (list, tuple, set, np.ndarray, pd.Series)):
+                for item in value:
+                    candidate = get_first_valid_date_value(item)
+                    if candidate is not None:
+                        return candidate
+                return None
+
+            if not self._is_valid_value(value):
+                return None
+
+            if isinstance(value, (datetime, pd.Timestamp, np.datetime64)):
+                return value
+
+            if isinstance(value, str):
+                try:
+                    parsed = pd.to_datetime(value, errors='coerce')
+                    if pd.notnull(parsed):
+                        return value
+                except Exception:
+                    return None
+
+            return None
+
         records = []
         key_column = 'patient_id'  
         for group_idx, (patient_id, group_df) in enumerate(df.groupby(key_column), start=1):
@@ -805,38 +840,57 @@ class DictionaryTransformer:
             }
         """
         
+        def parse_date_value(value):
+            """Parse date values from datetime, ISO strings, pandas timestamps, and MongoDB Extended JSON."""
+            if value is None:
+                return None
+
+            if isinstance(value, dict):
+                # MongoDB extended JSON dates are usually encoded as {"$date": ...}
+                if "$date" in value:
+                    return parse_date_value(value.get("$date"))
+                return None
+
+            if isinstance(value, pd.Timestamp):
+                dt = value.to_pydatetime()
+            elif isinstance(value, np.datetime64):
+                dt = pd.to_datetime(value).to_pydatetime()
+            elif isinstance(value, datetime):
+                dt = value
+            elif isinstance(value, str):
+                value = value.strip()
+                if not value:
+                    return None
+                try:
+                    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                except Exception:
+                    try:
+                        parsed = pd.to_datetime(value, utc=True)
+                        if pd.isna(parsed):
+                            return None
+                        dt = parsed.to_pydatetime()
+                    except Exception:
+                        return None
+            else:
+                return None
+
+            # Normalize to naive UTC for consistent datetime comparisons.
+            if dt.tzinfo is not None:
+                return dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt
+
         def get_treatment_date(treatment):
             # Collect all valid dates from the treatment
-            dates = []
             for key in ['date_field', 'date_sarcomaboard']:
                 if key in treatment and treatment[key]:
-                    date_val = treatment[key]
-                    # If already a datetime, return it
-                    if isinstance(date_val, datetime):
-                        return date_val
-                    # Else try parsing the ISO string (remove trailing "Z" if present)
-                    try:
-                        return datetime.fromisoformat(date_val.replace("Z", "+00:00"))
-                    except Exception:
-                        continue
+                    parsed_date = parse_date_value(treatment[key])
+                    if parsed_date is not None:
+                        return parsed_date
             return None  
         
         def parse_follow_up_date(follow_up_date):
             """Parse follow-up date from various formats"""
-            if not follow_up_date:
-                return None
-            if isinstance(follow_up_date, datetime):
-                return follow_up_date
-            if isinstance(follow_up_date, str):
-                try:
-                    return datetime.fromisoformat(follow_up_date.replace("Z", "+00:00"))
-                except Exception:
-                    try:
-                        # Try parsing with standard date parsing logic
-                        return self.parse_date(follow_up_date)
-                    except Exception:
-                        return None
-            return None
+            return parse_date_value(follow_up_date)
         
         # Filter out treatments with no valid date and sort by date.
         treatments_with_date = []
@@ -855,15 +909,18 @@ class DictionaryTransformer:
         if timeline:
             # Timeline-based aggregation: 6-month episodes
             
-            # Get the baseline date - prefer date_pathology_report from patient_static_data
+            # Get the baseline date from pathology report when present.
             baseline_date = None
             if patient_static_data and patient_static_data.get('general', {}).get('date_pathology_report'):
                 pathology_date = patient_static_data['general']['date_pathology_report']
                 baseline_date = parse_follow_up_date(pathology_date)
             
-            # Fall back to earliest treatment date if pathology report date not available
-            if not baseline_date:
-                baseline_date = treatments_with_date[0]['_parsed_date']
+            # Ensure episodes start early enough to include interventions occurring before pathology date.
+            earliest_treatment_date = treatments_with_date[0]['_parsed_date']
+            if baseline_date:
+                baseline_date = min(baseline_date, earliest_treatment_date)
+            else:
+                baseline_date = earliest_treatment_date
             
             # Determine the end date for episodes
             last_treatment_date = treatments_with_date[-1]['_parsed_date']
@@ -1040,6 +1097,132 @@ class DictionaryTransformer:
         
         return episodes
 
+    def group_episodes_into_treatments(self, episodes: list) -> dict:
+        def is_non_placeholder(value):
+            if value is None:
+                return False
+            if isinstance(value, str):
+                return value.strip().lower() not in {"", "-", "--", "na", "n/a", "none", "nan"}
+            return bool(pd.notnull(value))
+
+        def parse_any_date(value):
+            """Parse scalar/list/Mongo-date values to naive datetime when possible."""
+            if value is None:
+                return None
+
+            if isinstance(value, dict):
+                if "$date" in value:
+                    return parse_any_date(value.get("$date"))
+                return None
+
+            if isinstance(value, (list, tuple, set, np.ndarray, pd.Series)):
+                for item in value:
+                    parsed = parse_any_date(item)
+                    if parsed is not None:
+                        return parsed
+                return None
+
+            if isinstance(value, datetime):
+                return value.replace(tzinfo=None) if value.tzinfo is not None else value
+
+            if isinstance(value, pd.Timestamp):
+                dt = value.to_pydatetime()
+                return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+
+            if isinstance(value, str):
+                try:
+                    dt = pd.to_datetime(value, errors="coerce", utc=True)
+                    if pd.notnull(dt):
+                        return dt.to_pydatetime().replace(tzinfo=None)
+                except Exception:
+                    return None
+
+            return None
+
+        treatments = {
+            "any_surgery":               0,
+            "any_chemotherapy":          0,
+            "any_radiotherapy":          0,
+            "radiotherapy_preoperative": 0,
+            "any_metastasis":            0,
+            "any_local_recurrence":      0,
+            "dod":                       0,
+        }
+
+        # Prefer definitive/index surgery dates (those carrying surgery_indication).
+        # Fallback to any surgery date only when definitive dates are unavailable.
+        earliest_definitive_surgery_date = None
+        earliest_any_surgery_date = None
+        for episode in episodes:
+            for treatment in episode.get("treatments", []):
+                if treatment.get("section") != "surgery":
+                    continue
+                s_date = parse_any_date(treatment.get("date_field"))
+                if s_date is None:
+                    continue
+
+                if earliest_any_surgery_date is None or s_date < earliest_any_surgery_date:
+                    earliest_any_surgery_date = s_date
+
+                if is_non_placeholder(treatment.get("surgery_indication")):
+                    if earliest_definitive_surgery_date is None or s_date < earliest_definitive_surgery_date:
+                        earliest_definitive_surgery_date = s_date
+
+        reference_surgery_date = (
+            earliest_definitive_surgery_date
+            if earliest_definitive_surgery_date is not None
+            else earliest_any_surgery_date
+        )
+
+        for episode in episodes:
+            if episode.get("surgery", 0):
+                treatments["any_surgery"] = 1
+            if episode.get("chemotherapy", 0):
+                treatments["any_chemotherapy"] = 1
+            if episode.get("metastasis", 0):
+                treatments["any_metastasis"] = 1
+            if episode.get("local_recurrence", 0):
+                treatments["any_local_recurrence"] = 1
+            if episode.get("radiotherapy", 0):
+                treatments["any_radiotherapy"] = 1
+
+                for treatment in episode.get("treatments", []):
+                    if treatment.get("section") != "radiotherapy":
+                        continue
+
+                    rt_indication = treatment.get("radiotherapy_indication")
+                    if isinstance(rt_indication, (list, tuple, set, np.ndarray, pd.Series)):
+                        rt_indication_values = {
+                            str(val).strip().lower()
+                            for val in rt_indication
+                            if pd.notnull(val)
+                        }
+                        is_preoperative = "preoperative" in rt_indication_values
+                    else:
+                        is_preoperative = str(rt_indication).strip().lower() == "preoperative"
+
+                    # Fallback for unmapped/empty indication (e.g., "nicht mappen"):
+                    # infer preoperative if RT ends (or starts) on/before surgery date.
+                    if not is_preoperative and reference_surgery_date is not None:
+                        rt_end = parse_any_date(treatment.get("radiotherapy_end_date"))
+                        rt_start = parse_any_date(treatment.get("radiotherapy_start_date"))
+                        rt_anchor = rt_end if rt_end is not None else rt_start
+                        if rt_anchor is not None and rt_anchor <= reference_surgery_date:
+                            is_preoperative = True
+
+                    if is_preoperative:
+                        treatments["radiotherapy_preoperative"] = 1
+                        break
+            # DOD is stored in the diagnosis list under section "follow_up"
+            for diag in episode.get("diagnosis", []):
+                if (diag.get("section") == "follow_up" and
+                        diag.get("last_status") == "DOD"):
+                    treatments["dod"] = 1
+                    break
+
+        return treatments
+
+
     def data_assembler(self, episode):
         # Group treatments by section and merge dictionaries for the same section
         treatments = episode.get("treatments", [])
@@ -1063,6 +1246,12 @@ class DictionaryTransformer:
                     episode["chemotherapy"] = 1
                 elif section == "local_recurrence":
                     episode["local_recurrence"] = 1
+                    local_recurrence_treatment = str(
+                        treatment.get("treatment_local_recurrence", "")
+                    ).lower()
+                    # Local recurrence can encode treatment modality; map chemo mentions to episode flag.
+                    if "chemo" in local_recurrence_treatment:
+                        episode["chemotherapy"] = 1
                 elif section == "follow_up":
                     episode["final_status"] = 1
                 elif section in ["surgery", "chemotherapy", "radiotherapy", "metastasis"]:
@@ -1265,6 +1454,36 @@ class DictionaryTransformer:
         list: A list of dictionaries, each representing a patient record.
         """
 
+        def get_first_valid_date_value(value):
+            """Return a scalar date-like value usable by episode parsing, else None."""
+            if isinstance(value, dict):
+                if "$date" in value:
+                    return value
+                return None
+
+            if isinstance(value, (list, tuple, set, np.ndarray, pd.Series)):
+                for item in value:
+                    candidate = get_first_valid_date_value(item)
+                    if candidate is not None:
+                        return candidate
+                return None
+
+            if not self._is_valid_value(value):
+                return None
+
+            if isinstance(value, (datetime, pd.Timestamp, np.datetime64)):
+                return value
+
+            if isinstance(value, str):
+                try:
+                    parsed = pd.to_datetime(value, errors='coerce')
+                    if pd.notnull(parsed):
+                        return value
+                except Exception:
+                    return None
+
+            return None
+
         records = []
         
         for group_idx, (patient_id, group_df) in enumerate(df.groupby(key_column), start=1):
@@ -1305,8 +1524,22 @@ class DictionaryTransformer:
                     # Also extract date_field and date_sarcoma_board if present
                     if 'date_field' in config:
                         date_val = row.get(config['date_field'])
-                        if self._is_valid_value(date_val):
-                            dict_tmp['date_field'] = date_val
+                        parsed_date_val = get_first_valid_date_value(date_val)
+                        if parsed_date_val is not None:
+                            dict_tmp['date_field'] = parsed_date_val
+                        elif group == 'surgery':
+                            # Whoops-only cases may not have date_index_surgery; use whoops date as surgery date.
+                            fallback_surgery_date = row.get('date_whoops')
+                            fallback_surgery_parsed_date = get_first_valid_date_value(fallback_surgery_date)
+                            if fallback_surgery_parsed_date is not None:
+                                dict_tmp['date_field'] = fallback_surgery_parsed_date
+                        elif group == 'radiotherapy':
+                            # Some frozen exports carry RT evidence without explicit start date.
+                            # Anchor such RT records to pathology date so they can be assigned to an episode.
+                            fallback_rt_date = row.get('date_pathology_report')
+                            fallback_parsed_date = get_first_valid_date_value(fallback_rt_date)
+                            if fallback_parsed_date is not None:
+                                dict_tmp['date_field'] = fallback_parsed_date
                     
                     if 'date_sarcoma_board' in config:
                         date_sb = row.get(config['date_sarcoma_board'])
@@ -1355,8 +1588,9 @@ class DictionaryTransformer:
                 follow_up_date=follow_up_date,
                 patient_static_data=patient_record  # Pass the entire patient record for static data access
             )
+            patient_record['treatments'].update(self.group_episodes_into_treatments(patient_record['episodes']))
             records.append(patient_record)
-        
+
         return records
     
 
@@ -2237,8 +2471,25 @@ class FeatureExtractor:
     
     def get_therapy_flag(self):
         #surgery_flag
+        def has_surgery_evidence(row):
+            if pd.notnull(row.get('surgery_indication')):
+                return 1
+
+            # Some exports have missing/misaligned surgery_indication but still
+            # provide a concrete index surgery date.
+            if pd.notnull(row.get('date_index_surgery')):
+                return 1
+
+            # Treat whoops surgery as surgery event as well.
+            whoops_fields = [
+                'date_whoops',
+                'whoops_margin_status',
+                'whoops_surgery_institution',
+            ]
+            return 1 if any(pd.notnull(row.get(field)) for field in whoops_fields) else 0
+
         self.df['surgery_flag'] = self.df.apply(
-            lambda row: 1 if pd.notnull(row['surgery_indication']) else 0,
+            has_surgery_evidence,
             axis=1
         )
 
@@ -2246,10 +2497,53 @@ class FeatureExtractor:
         self.data_type_mapping['surgery_flag'] = int
         
         #radiation_oncology_flag
-        self.df['radiation_oncology_flag'] = self.df.apply(
-            lambda row: 1 if pd.notnull(row['radiotherapy_indication']) and row['radiotherapy_indication'] != 'no radiotherapy' else 0,
-            axis=1
-        )
+        def has_radiotherapy_evidence(row):
+            def is_present(value):
+                if isinstance(value, dict):
+                    # Support Mongo-style extended JSON dates and nested structures.
+                    if "$date" in value:
+                        return is_present(value.get("$date"))
+                    return any(is_present(v) for v in value.values())
+
+                if isinstance(value, (list, tuple, set, np.ndarray, pd.Series)):
+                    return any(is_present(v) for v in value)
+
+                if value is None:
+                    return False
+
+                if isinstance(value, str):
+                    return value.strip().lower() not in {
+                        "", "nan", "none", "-", "--", "na", "n/a", "nicht mappen"
+                    }
+
+                return bool(pd.notnull(value))
+
+            indication = row.get('radiotherapy_indication')
+
+            # Direct indication evidence, excluding explicit "no radiotherapy".
+            if is_present(indication):
+                if isinstance(indication, (list, tuple, set, np.ndarray, pd.Series)):
+                    indication_values = [
+                        str(v).strip().lower()
+                        for v in indication
+                        if is_present(v)
+                    ]
+                    if any(v != 'no radiotherapy' for v in indication_values):
+                        return 1
+                elif str(indication).strip().lower() != 'no radiotherapy':
+                    return 1
+
+            # Fallback evidence when indication is unmapped/missing but RT values exist in source sheet.
+            evidence_fields = [
+                'radiotherapy_start_date',
+                'radiotherapy_end_date',
+                'radiotherapy_total_dose',
+                'radiotherapy_num_fractions',
+                'radiotherapy_type',
+            ]
+            return 1 if any(is_present(row.get(field)) for field in evidence_fields) else 0
+
+        self.df['radiation_oncology_flag'] = self.df.apply(has_radiotherapy_evidence, axis=1)
 
         self.relevant_features['dynamic']['radiotherapy']['radiation_oncology_flag'] = 'radiation_oncology_flag'
         self.data_type_mapping['radiation_oncology_flag'] = int
@@ -2326,11 +2620,32 @@ class FeatureExtractor:
 
     def get_merge_grading_biopsy_resection(self):
         
-        self.df['grading_biopsy'], self.df['grading_resection']
-
-        self.df['initial_size'] = (self.df['initial_size_a']**2 + self.df['initial_size_b']**2 + self.df['initial_size_c']**2)**0.5
-        self.relevant_features['dynamic']['diagnosis']['fields']['initial_size'] = 'initial_size'
-        self.data_type_mapping['initial_size'] = float
+        # Merge grading information: two-level priority
+        # Level 1: Look for G1, G2, or G3 in either column
+        # Level 2: If neither has those grades, return any valid string
+        def get_valid_grading(biopsy_val, resection_val):
+            valid_grades = ['G1', 'G2', 'G3']
+            
+            # Level 1: Check for G1, G2, or G3 in biopsy first
+            if pd.notna(biopsy_val) and biopsy_val in valid_grades:
+                return biopsy_val
+            # Check for G1, G2, or G3 in resection
+            if pd.notna(resection_val) and resection_val in valid_grades:
+                return resection_val
+            
+            # Level 2: If neither has G1/G2/G3, return any valid string from biopsy
+            if pd.notna(biopsy_val):
+                return biopsy_val
+            # Fallback to any valid string from resection
+            if pd.notna(resection_val):
+                return resection_val
+            
+            return None
+        
+        self.df['biopsy_grading'] = self.df.apply(
+            lambda row: get_valid_grading(row.get('biopsy_grading'), row.get('resection_grading')),
+            axis=1
+        )
         return self
 
     def time_range_in_episodes(self, start_date_col, end_date_col):
@@ -2443,6 +2758,72 @@ class FeatureExtractor:
                 # If main column doesn't exist, create it from first_* column
                 self.df[main_col] = self.df[first_col]
         
+        return self
+
+    def get_merge_radiotherapy_indication_raw(self):
+        """
+        Combines raw radiotherapy indication into canonical radiotherapy_indication.
+        Keeps the canonical field as the single source used by downstream logic.
+        """
+        if 'radiotherapy_indication_raw' not in self.df.columns:
+            return self
+
+        if 'radiotherapy_indication' not in self.df.columns:
+            self.df['radiotherapy_indication'] = None
+
+        placeholder_values = {
+            '', '-', '--', 'na', 'n/a', 'none', 'nan', 'nicht mappen'
+        }
+
+        def normalize_indication(value):
+            if value is None:
+                return None
+
+            if isinstance(value, (list, tuple, set, np.ndarray, pd.Series)):
+                normalized_values = [normalize_indication(v) for v in value]
+                normalized_values = [v for v in normalized_values if v is not None]
+                return normalized_values[0] if normalized_values else None
+
+            val_str = str(value).strip().lower()
+            if val_str in placeholder_values:
+                return None
+
+            if 'preoperative' in val_str or val_str.startswith('[1]') or val_str.startswith('1 '):
+                return 'preoperative'
+            if 'postoperative' in val_str or val_str.startswith('[2]') or val_str.startswith('2 '):
+                return 'postoperative'
+            if 'definitive' in val_str or val_str.startswith('[3]') or val_str.startswith('3 '):
+                return 'definitive'
+            if 'palliative' in val_str or 'palliativ' in val_str or val_str.startswith('[4]') or val_str.startswith('4 '):
+                return 'palliative'
+            if 'intraoperativ' in val_str or 'intraoperative' in val_str:
+                return 'intraoperative'
+            if 'no radiotherapy' in val_str or 'no therapy' in val_str:
+                return 'no radiotherapy'
+            if 'other' in val_str or 'unknown' in val_str:
+                return 'other_unknown'
+
+            return str(value).strip()
+
+        def is_missing_canonical(value):
+            if value is None:
+                return True
+            if isinstance(value, float) and pd.isna(value):
+                return True
+            val_str = str(value).strip().lower()
+            return val_str in placeholder_values
+
+        self.df['radiotherapy_indication_raw'] = self.df['radiotherapy_indication_raw'].apply(normalize_indication)
+
+        self.df['radiotherapy_indication'] = self.df.apply(
+            lambda row: (
+                row.get('radiotherapy_indication_raw')
+                if is_missing_canonical(row.get('radiotherapy_indication'))
+                else row.get('radiotherapy_indication')
+            ),
+            axis=1,
+        )
+
         return self
         
     
@@ -2625,6 +3006,42 @@ class FeatureExtractor:
         return (self.get_metastasis_after_first_treatment()
                 .df)
     
+    def get_extremity_tumor(self):
+        self.df['extremity_tumor'] = self.df['anatomic_region_code'].apply(lambda x: 1 if x in  [
+    # upper extremity
+    "clavicle",
+    "scapula",
+    "shoulder_girdle",
+    "scapular_region",
+    "axilla",
+    "shoulder_joint",
+    "humerus",
+    "upper_arm",
+    "elbow",
+    "elbow_region",
+    "forearm_bones",
+    "forearm",
+    "wrist",
+    "hand",
+
+    # lower extremity
+    "hip_joint",
+    "thigh",
+    "femur",
+    "knee",
+    "patella",
+    "lower_leg",
+    "tibia_fibula",
+    "ankle",
+    "foot",
+
+    # groin / proximal lower limb (common choice for "extremity")
+    "inguinal_region",
+] else 0)
+        self.relevant_features['static']['tumor_characteristics'].append('extremity_tumor')
+        self.data_type_mapping['extremity_tumor'] = int
+        return self
+
     def process_frozen(self):
         return (self.get_age()
                 .get_initial_size()
@@ -2634,12 +3051,15 @@ class FeatureExtractor:
                 .get_episodes_radiotherapy()
                 .get_radiotherapy_timerange()
                 .get_merge_first_radio_into_main()
+                .get_merge_radiotherapy_indication_raw()
                 .get_expand_local_recurrence()
                 .get_episodes_local_recurrence()
                 .get_expand_metastasis()
                 .get_episodes_metastasis()
                 .get_episodes_follow_up()
+                .get_merge_grading_biopsy_resection()
                 .get_therapy_flag()
+                .get_extremity_tumor()
                 .remove_duplicates_drug_names()
                 .df)
     

@@ -1111,6 +1111,7 @@ column_renaming_map = {
     "Start Radiotherapy": "radiotherapy_start_date",
     "End Radiotherapy": "radiotherapy_end_date",
     "Indication for radiotherapy": "radiotherapy_indication",
+    "Indication for Radiotherapy = nicht mappen": "radiotherapy_indication_raw",
     "Number of fractions given": "radiotherapy_num_fractions",
     "Type of radiotherapy": "radiotherapy_type",
     "PTV": "radiotherapy_ptv",
@@ -1250,6 +1251,7 @@ data_type_mapping = {
     "radiotherapy_start_date": "datetime",
     "radiotherapy_end_date": "datetime",
     "radiotherapy_indication": str,
+    "radiotherapy_indication_raw": str,
     "radiotherapy_num_fractions": float,  # some datasets store as numeric with missing/decimals
     "radiotherapy_type": str,
     "radiotherapy_ptv": float,

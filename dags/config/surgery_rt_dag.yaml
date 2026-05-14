@@ -1,0 +1,364 @@
+mongodb:
+  # Connection details (uses environment variables by default)
+  # uri: "mongodb://localhost:27017/"  # Uncomment to override MONGO_URI
+  # database: "sarcoma_dt"              # Uncomment to override MONGO_DB
+  # collection: "patients"              # Uncomment to override MONGO_COLLECTION
+  
+  # MongoDB query to filter documents
+  query:
+    # Example: only include patients with specific criteria
+    # status: "completed"
+    # diagnosis.metastasis_present_at_diagnosis: { $exists: true }
+    {}
+  
+  # MongoDB aggregation pipeline
+  pipeline:
+    - $project:
+        _id: 1
+      # "tumor_characteristics.biopsy_grading": 1
+        "tumor_characteristics.extremity_tumor": 1
+        "tumor_characteristics.anatomic_region_grouping": 1
+        "tumor_characteristics.initial_size": 1
+        "treatments.pathologist_margin_judgement": 1
+        "general.age": 1
+        "treatments.any_surgery": 1
+        "treatments.any_chemotherapy": 1
+        "treatments.any_radiotherapy": 1
+        "treatments.radiotherapy_preoperative": 1
+        "treatments.any_metastasis": 1
+        "treatments.any_local_recurrence": 1
+        "treatments.dod": 1
+   
+    # filter away patients without last_status
+    - $match:
+        $and:
+          - { "tumor_characteristics.biopsy_grading": { $in: ["G3", null] } } #"G1", "G2",
+          - { "tumor_characteristics.anatomic_region_grouping": { $in: ["deep_soft_tissue", "superficial_soft_tissue", null] } }
+          - { "treatments.pathologist_margin_judgement": { $in: ["R0", "R1"] } }
+          - { "treatments.any_chemotherapy": { $in: [0] } }
+          - $or:
+              - { "tumor_characteristics.initial_size": { $gte: 40 } }
+              - { "tumor_characteristics.initial_size": null }
+          - $or:
+              - { "general.age": { $lt: 70 } }
+              - { "general.age": null}
+          
+
+  
+  include_id: false
+
+# =============================================================================
+# Feature Selection
+# =============================================================================
+
+features:
+  include:
+    # - treatments.any_surgery
+    # - treatments.any_radiotherapy
+    - treatments.radiotherapy_preoperative
+    - treatments.any_metastasis
+    - treatments.any_local_recurrence
+    - treatments.dod
+    - general.age
+    # general
+    # tumor_characteristics.who_diagnosis_code
+    # - tumor_characteristics.biopsy_grading
+    - tumor_characteristics.extremity_tumor
+    - tumor_characteristics.anatomic_region_grouping
+    - tumor_characteristics.initial_size
+    - treatments.pathologist_margin_judgement
+    
+    # - ajcc_stage
+  
+  exclude: []
+
+
+variable_types:
+  # 'treatments.any_surgery': binary
+  # 'treatments.any_radiotherapy': binary
+  'treatments.radiotherapy_preoperative': binary
+  'treatments.any_metastasis': binary
+  'treatments.any_local_recurrence': binary
+  'treatments.dod': binary
+  # 'general.gender': categorical
+  'general.age': numerical
+  # 'tumor_characteristics.biopsy_grading': categorical
+  # 'tumor_characteristics.who_diagnosis_code': categorical
+  'tumor_characteristics.extremity_tumor': binary
+  'tumor_characteristics.anatomic_region_grouping': binary
+  'tumor_characteristics.initial_size': numerical
+  'treatments.pathologist_margin_judgement': categorical
+  # 'ajcc_stage': categorical
+
+# =============================================================================
+# Binning Configuration for Numerical Variables
+# =============================================================================
+# Discretize continuous numerical variables into bins for discrete Bayesian networks
+# Only applies to numerical variables that need discretization
+
+binning:
+  'tumor_characteristics.initial_size':
+    n_bins: 3
+    method: 'quantile'  # 'quantile' (equal frequency) or 'uniform' (equal width)
+  'general.age':
+    n_bins: 2
+    method: 'quantile'
+
+# =============================================================================
+# Custom Value Mappings
+# =============================================================================
+# Map string values to numeric codes for categorical variables
+# This ensures pgmpy can properly infer datatypes
+
+mappings:
+  # general.gender:
+  #   'male': 0
+  #   'female': 1
+  
+  # tumor_characteristics.biopsy_grading:
+  #   'G1': 1
+  #   'G2': 2
+  #   'G3': 3
+  #   'benign': 0
+  #   'not_a_sarcoma': -1
+  #   'non_diagnostic': -2
+  
+  tumor_characteristics.who_diagnosis_code:
+    'leiomyosarcoma': 1
+    'liposarcoma': 2
+    'undifferentiated_sarcoma': 3
+    'osteosarcoma': 4
+    'benign_cartilage': 5
+    'ewing_sarcoma': 6
+    'fibroblastic_tumor': 7
+    'gist': 8
+    'chondrosarcoma': 9
+    'giant_cell_tumor': 10
+    'other_soft_tissue_sarcoma': 11
+    'vascular_sarcoma': 12
+    'benign_adipocytic': 13
+    'rhabdomyosarcoma': 14
+    'hematologic_malignancy': 15
+    'malignant_nerve_sheath': 16
+    'metastasis': 17
+    'benign_bone_lesion': 18
+    'other_carcinoma': 19
+    'pericytic_tumor': 20
+    'benign_non_neoplastic': 21
+    'benign_vascular': 22
+    'benign_bone': 23
+    'benign_nerve_sheath': 24
+  
+  tumor_characteristics.metastasis_present_at_diagnosis:
+    'no': 0
+    'yes': 1
+
+  tumor_characteristics.anatomic_region_grouping:
+    'deep_soft_tissue': 0
+    'superficial_soft_tissue': 1
+    'bone': 2
+  
+  treatments.pathologist_margin_judgement:
+    'R0': 0
+    'R1': 1
+    'R2': 2
+
+  # ajcc_stage:
+  #   'IA': 1
+  #   'IB': 2
+  #   'II': 3
+  #   'IIIA': 4
+  #   'IIIB': 5
+  #   'IV': 6
+
+# =============================================================================
+# Display Name Mappings for Visualization
+# =============================================================================
+# Map internal column names to clean display names for DAG visualization
+
+display_names:
+  'general.age': 'Age'
+  'tumor_characteristics.initial_size': 'Initial Size'
+  # 'tumor_characteristics.biopsy_grading': 'Biopsy Grading'
+  'tumor_characteristics.extremity_tumor': 'Extremity Tumor'
+  'tumor_characteristics.metastasis_present_at_diagnosis': 'Metastasis at Diagnosis'
+  'treatments.pathologist_margin_judgement': 'Margin Status'
+  'treatments.any_surgery': 'Surgery'
+  'treatments.any_radiotherapy': 'Radiotherapy'
+  'treatments.radiotherapy_indication': 'Radiotherapy Indication'
+  'treatments.any_chemotherapy': 'Chemotherapy'
+  'treatments.any_local_recurrence': 'Local Recurrence'
+  'treatments.any_metastasis': 'Metastasis'
+  'treatments.dod': 'Death of Disease'
+
+# =============================================================================
+# Causal Constraints
+# =============================================================================
+
+constraints:
+  edges:
+    required:
+      # Baseline -> outcomes links (enforced for backdoor adjustment support)
+      - [general.age, treatments.any_local_recurrence]
+      - [general.age, treatments.any_metastasis]
+      - [general.age, treatments.dod]
+      - [tumor_characteristics.initial_size, treatments.any_local_recurrence]
+      - [tumor_characteristics.initial_size, treatments.any_metastasis]
+      - [tumor_characteristics.initial_size, treatments.dod]
+      - [tumor_characteristics.extremity_tumor, treatments.any_local_recurrence]
+      - [tumor_characteristics.extremity_tumor, treatments.any_metastasis]
+      - [tumor_characteristics.extremity_tumor, treatments.dod]
+      - [tumor_characteristics.anatomic_region_grouping, treatments.any_local_recurrence]
+      - [tumor_characteristics.anatomic_region_grouping, treatments.any_metastasis]
+      - [tumor_characteristics.anatomic_region_grouping, treatments.dod]
+
+      - [general.age, treatments.radiotherapy_preoperative]
+      - [tumor_characteristics.anatomic_region_grouping, treatments.radiotherapy_preoperative]
+      - [tumor_characteristics.extremity_tumor, treatments.radiotherapy_preoperative]
+      - [tumor_characteristics.initial_size, treatments.radiotherapy_preoperative]
+      - [treatments.any_local_recurrence, treatments.any_metastasis]
+      - [treatments.pathologist_margin_judgement, treatments.any_local_recurrence]
+     
+
+      - [tumor_characteristics.initial_size, treatments.pathologist_margin_judgement]
+
+      - [tumor_characteristics.anatomic_region_grouping, treatments.pathologist_margin_judgement]
+      - [treatments.radiotherapy_preoperative, treatments.pathologist_margin_judgement]
+      # - [tumor_characteristics.metastasis_present_at_diagnosis, DOD]
+      # - [radiotherapy, local_recurrence]
+      # # - [tumor_characteristics.metastasis_present_at_diagnosis, chemotherapy]
+      # # - [tumor_characteristics.metastasis_present_at_diagnosis, metastasis]
+      # # - [local_recurrence, metastasis]
+      # # - [local_recurrence, DOD]
+      # # - [metastasis, DOD]
+      # - [surgery, metastasis]
+      # - [surgery, local_recurrence]
+      # # - [chemotherapy, metastasis]
+      # - [chemotherapy, local_recurrence]
+      # - [radiotherapy, metastasis]
+      # - [radiotherapy, local_recurrence]
+      # # - [tumor_characteristics.biopsy_grading, local_recurrence]
+      # # - [tumor_characteristics.biopsy_grading, metastasis]
+      # # - [tumor_characteristics.biopsy_grading, metastasis]
+      # # - [tumor_characteristics.biopsy_grading, radiotherapy]
+      # - [tumor_characteristics.biopsy_grading, chemotherapy]
+      # # - [tumor_characteristics.initial_size, tumor_characteristics.extremity_tumor]
+      # - [tumor_characteristics.initial_size, tumor_characteristics.biopsy_grading]
+      # # - [tumor_characteristics.initial_size, tumor_characteristics.who_diagnosis_code]
+      # # - [tumor_characteristics.who_diagnosis_code, tumor_characteristics.biopsy_grading]
+      # # - [tumor_characteristics.extremity_tumor, tumor_characteristics.biopsy_grading]
+      # # - ['local_recurrence', 'DOD' ]
+    forbidden:
+      # Tier 1 -> Tier 0 (treatments cannot cause baseline diagnosis covariates)
+      # - [treatments.any_surgery, general.age]
+      # - [treatments.any_surgery, tumor_characteristics.initial_size]
+      # - [treatments.any_surgery, tumor_characteristics.biopsy_grading]
+      # - [treatments.any_surgery, tumor_characteristics.extremity_tumor]
+      # - [treatments.any_surgery, tumor_characteristics.anatomic_region_grouping]
+
+      # - [treatments.any_radiotherapy, general.age]
+      # - [treatments.any_radiotherapy, tumor_characteristics.initial_size]
+      # - [treatments.any_radiotherapy, tumor_characteristics.biopsy_grading]
+      # - [treatments.any_radiotherapy, tumor_characteristics.extremity_tumor]
+      # - [treatments.any_radiotherapy, tumor_characteristics.anatomic_region_grouping]
+      - [tumor_characteristics.extremity_tumor, general.age]
+      - [general.age, tumor_characteristics.extremity_tumor]
+
+      - [tumor_characteristics.initial_size, tumor_characteristics.anatomic_region_grouping]
+      - [tumor_characteristics.anatomic_region_grouping, tumor_characteristics.initial_size]
+
+      - [treatments.radiotherapy_preoperative, general.age]
+      - [treatments.radiotherapy_preoperative, tumor_characteristics.initial_size]
+      # - [treatments.radiotherapy_preoperative, tumor_characteristics.biopsy_grading]
+      - [treatments.radiotherapy_preoperative, tumor_characteristics.extremity_tumor]
+      - [treatments.radiotherapy_preoperative, tumor_characteristics.anatomic_region_grouping]
+
+      - [treatments.pathologist_margin_judgement, general.age]
+      - [treatments.pathologist_margin_judgement, tumor_characteristics.initial_size]
+      # - [treatments.pathologist_margin_judgement, tumor_characteristics.biopsy_grading]
+      - [treatments.pathologist_margin_judgement, tumor_characteristics.extremity_tumor]
+      - [treatments.pathologist_margin_judgement, tumor_characteristics.anatomic_region_grouping]
+
+      # Tier 2 -> Tier 0
+      - [treatments.any_local_recurrence, general.age]
+      - [treatments.any_local_recurrence, tumor_characteristics.initial_size]
+      # - [treatments.any_local_recurrence, tumor_characteristics.biopsy_grading]
+      - [treatments.any_local_recurrence, tumor_characteristics.extremity_tumor]
+      - [treatments.any_local_recurrence, tumor_characteristics.anatomic_region_grouping]
+
+      - [treatments.any_metastasis, general.age]
+      - [treatments.any_metastasis, tumor_characteristics.initial_size]
+      # - [treatments.any_metastasis, tumor_characteristics.biopsy_grading]
+      - [treatments.any_metastasis, tumor_characteristics.extremity_tumor]
+      - [treatments.any_metastasis, tumor_characteristics.anatomic_region_grouping]
+
+      # Tier 2 -> Tier 1
+      # - [treatments.any_local_recurrence, treatments.any_surgery]
+      # - [treatments.any_local_recurrence, treatments.any_radiotherapy]
+      - [treatments.any_local_recurrence, treatments.radiotherapy_preoperative]
+      - [treatments.any_local_recurrence, treatments.pathologist_margin_judgement]
+
+      # - [treatments.any_metastasis, treatments.any_surgery]
+      # - [treatments.any_metastasis, treatments.any_radiotherapy]
+      - [treatments.any_metastasis, treatments.radiotherapy_preoperative]
+      - [treatments.any_metastasis, treatments.pathologist_margin_judgement]
+      - [treatments.radiotherapy_preoperative, treatments.any_metastasis]
+
+      # Tier 3 -> Tier 0
+      - [treatments.dod, general.age]
+      - [treatments.dod, tumor_characteristics.initial_size]
+      # - [treatments.dod, tumor_characteristics.biopsy_grading]
+      - [treatments.dod, tumor_characteristics.extremity_tumor]
+      - [treatments.dod, tumor_characteristics.anatomic_region_grouping]
+
+      # Tier 3 -> Tier 1
+      # - [treatments.dod, treatments.any_surgery]
+      # - [treatments.dod, treatments.any_radiotherapy]
+      - [treatments.dod, treatments.radiotherapy_preoperative]
+      - [treatments.dod, treatments.pathologist_margin_judgement]
+
+      # Tier 3 -> Tier 2
+      - [treatments.dod, treatments.any_local_recurrence]
+      - [treatments.dod, treatments.any_metastasis]
+
+  
+  tiers:
+    node_to_tier:
+      # Tier 0: baseline (diagnosis)
+      general.age: 0
+      # general.gender: 0
+      tumor_characteristics.initial_size: 0
+      # tumor_characteristics.biopsy_grading: 0
+      # tumor_characteristics.who_diagnosis_code: 0
+      # tumor_characteristics.anatomic_region_grouping: 0
+      tumor_characteristics.extremity_tumor: 0
+      tumor_characteristics.metastasis_present_at_diagnosis: 0
+      # ajcc_stage: 0
+      tumor_characteristics.anatomic_region_grouping: 0
+      # Tier 1: primary treatments
+      # treatments.any_surgery: 1
+      # treatments.any_radiotherapy: 1
+      treatments.radiotherapy_indication: 1
+      treatments.radiotherapy_preoperative: 1
+      treatments.pathologist_margin_judgement: 1
+      # Tier 2: follow-up events
+      treatments.any_local_recurrence: 2
+      treatments.any_metastasis: 2
+      # Tier 3: terminal endpoints (patient status indicators)
+      treatments.dod: 3
+    
+    allow_intra_tier_edges: true
+
+# =============================================================================
+# Algorithm Configuration
+# =============================================================================
+
+algorithm:
+  # method options: pc, pc_stable, pc_pgmpy, ges
+  # - pc: default PC algorithm (uses learn_dag function)
+  # - pc_stable: custom PC-Stable with audit logging support (RESPECTS CONSTRAINTS PROPERLY)
+  # - pc_pgmpy: native pgmpy.estimators.PC (expert knowledge needs post-processing)
+  # - ges: Greedy Equivalence Search
+  method: pc_pgmpy
+  ci_test: chi_square
+  significance_level: 0.05

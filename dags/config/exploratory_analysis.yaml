@@ -1,0 +1,197 @@
+# Configuration for exploratory data analysis of treatment patterns and patient characteristics
+
+# MongoDB connection
+mongodb:
+  uri: "mongodb://localhost:27017"
+  database: "sarcoma_db"
+  collection: "patients"
+  # Optional: query filter for data selection
+  query: {}
+  # Optional: exclude _id from results
+  include_id: false
+
+# Data filtering
+filtering:
+  # Only include soft tissue sarcomas based on anatomic region
+  soft_tissue_only: true
+  # Anatomic regions to include (soft tissue only)
+  anatomic_regions_included:
+    - deep_soft_tissue
+    - superficial_soft_tissue
+  # Exclude non-malignant cases based on biopsy grading
+  exclude_biopsy_grading:
+    - benign
+    - not_a_sarcoma
+    - suspicious_of_malignancy
+  # Also exclude patients with missing/null biopsy grading
+  exclude_missing_grading: false
+
+# Patient characteristics to analyze
+patient_characteristics:
+  demographic:
+    - general.gender
+    - general.age
+    - general.institution
+    - general.status  # Patient status: DOD, AWD, NED
+    - last_status  # Last recorded status
+  
+  tumor:
+    - tumor_characteristics.biopsy_grading
+    - tumor_characteristics.who_diagnosis_code
+    - tumor_characteristics.anatomic_region_code
+    - tumor_characteristics.anatomic_region_grouping
+    - tumor_characteristics.anatomic_region_side
+    - tumor_characteristics.metastasis_present_at_diagnosis
+    - tumor_characteristics.initial_size
+    - tumor_characteristics.extremity_tumor
+  
+  treatment_summary:
+    - treatments.surgery_indication
+    - treatments.pathologist_margin_judgement
+    - treatments.tumor_max_size_before_surgery
+
+# Treatment fields to analyze from episodes
+episode_treatments:
+  - surgery
+  - chemotherapy
+  - radiotherapy
+  - metastasis
+  - local_recurrence
+  - final_status
+
+# Treatment sequences to analyze from diagnosis_treatment_sequence
+treatment_sequences:
+  sections:
+    - surgery
+    - chemotherapy
+    - radiotherapy
+    - local_recurrence
+    - metastasis
+    - follow_up
+  
+  # Specific fields within treatment sections
+  surgery_fields:
+    - whoops
+    - surgery_indication
+    - pathologist_margin_judgement
+    - tumor_max_size_before_surgery
+  
+  radiotherapy_fields:
+    - radiotherapy_indication
+    - radiotherapy_type
+    - radiotherapy_total_dose
+    - radiotherapy_num_fractions
+  
+  chemotherapy_fields:
+    - chemotherapy_line
+    - chemotherapy_agent
+
+# Age binning configuration
+age_bins:
+  bins: [0, 30, 40, 50, 60, 70, 80, 120]
+  labels: ["<30", "30-40", "40-50", "50-60", "60-70", "70-80", "80+"]
+
+# Tumor size binning configuration
+size_bins:
+  bins: [0, 50, 100, 150, 200, 500]
+  labels: ["<50mm", "50-100mm", "100-150mm", "150-200mm", ">200mm"]
+
+# Key clinical variables for analysis
+key_clinical_variables:
+  # Variables to highlight in analysis
+  outcomes:
+    - had_metastasis  # Any metastasis during follow-up
+    - had_local_recurrence  # Any local recurrence
+    - metastasis_present_at_diagnosis  # Metastasis at baseline
+    - final_status  # DOD, AWD, NED, etc.
+  
+  tumor_characteristics:
+    - who_diagnosis_code  # Histological subtype
+    - extremity_tumor  # Extremity vs non-extremity
+    - biopsy_grading  # G1, G2, G3
+    - anatomic_region_grouping  # Deep vs superficial
+  
+  surgical_outcomes:
+    - pathologist_margin_judgement  # R0, R1, R2
+
+# Analysis options
+analysis:
+  # Generate distribution plots
+  generate_plots: true
+  
+  # Generate cross-tabulations
+  generate_crosstabs: true
+  
+  # Generate summary statistics
+  generate_statistics: true
+  
+  # Analyze treatment sequences
+  analyze_sequences: true
+  
+  # Analyze treatment indications (surgery, radiotherapy, and chemotherapy)
+  analyze_indications: true
+  
+  # Analyze treatment regimes with radiotherapy timing (preop vs postop) by moderators
+  analyze_regime_timing: true
+  
+  # Analyze key clinical outcomes (metastasis, recurrence, DOD)
+  analyze_clinical_outcomes: true
+  
+  # Episode-level analysis
+  analyze_episodes: true
+  
+  # Treatment regime patterns
+  analyze_regimes: true
+
+# Output configuration
+output:
+  # Base directory for all outputs
+  base_dir: "output/exploratory_analysis"
+  
+  # Subdirectories
+  plots_dir: "plots"
+  tables_dir: "tables"
+  reports_dir: "reports"
+  
+  # File formats
+  plot_format: "png"
+  table_format: "csv"
+  report_format: "html"
+  
+  # Summary report name
+  summary_report: "treatment_distribution_summary.html"
+  
+  # Data export
+  export_processed_data: true
+  processed_data_file: "processed_patient_data.csv"
+
+# Visualization settings
+visualization:
+  # Figure size for plots (width, height in inches)
+  figsize: [12, 8]
+  
+  # DPI for saved figures
+  dpi: 300
+  
+  # Color palette
+  palette: "Set2"
+  
+  # Font size
+  font_size: 10
+  
+  # Style
+  style: "whitegrid"
+
+# Statistical analysis settings
+statistics:
+  # Confidence level for confidence intervals
+  confidence_level: 0.95
+  
+  # Minimum group size for analysis
+  min_group_size: 5
+  
+  # Statistical tests to perform
+  perform_chi_square: true
+  perform_fisher_exact: true
+  perform_t_tests: true
+  perform_anova: false

@@ -17,13 +17,13 @@ from pgmpy.estimators import PC, ExpertKnowledge
 from pgmpy.models import BayesianNetwork
 from pymongo import MongoClient
 
-from dtcygan.constraints import ConstraintParser, ConstraintSet, EdgeConstraints, TierConstraints
+from dtcygan.constraints import ConstraintParser, _build_constraints_from_config
 from dtcygan.data_bundle import DataBundle
 from dtcygan.data_schema import DataSchema
 from dtcygan.io import DAGSerializer
 from dtcygan.learning import PCStableLearner
 from dtcygan.structure import StructureLearningResult, learn_dag
-
+from dtcygan.data_processing.data_processing import DataProcessing
 
 class CITestLogger:
     """Wrapper for pgmpy CI tests that logs all test results."""
@@ -130,54 +130,6 @@ def _sigmoid(x: np.ndarray) -> np.ndarray:
     return 1 / (1 + np.exp(-x))
 
 
-def generate_random_dataframe(rows: int, seed: int) -> pd.DataFrame:
-    """Generate synthetic medical data with causal relationships."""
-    rng = np.random.default_rng(seed)
-
-    gender = rng.integers(0, 2, size=rows)
-    institution = rng.integers(0, 3, size=rows)
-
-    biopsy_grading = np.clip(
-        1 + gender + (institution == 2).astype(int) + rng.normal(0, 0.6, size=rows),
-        1,
-        4,
-    ).round()
-
-    who_diagnosis_code = np.clip(
-        100 + 10 * biopsy_grading + rng.normal(0, 4, size=rows),
-        90,
-        160,
-    ).round()
-
-    anatomic_region_code = np.clip(
-        200 + 4 * institution + rng.normal(0, 3, size=rows),
-        190,
-        220,
-    ).round()
-    anatomic_region_grouping = (anatomic_region_code // 5).astype(int)
-    anatomic_region_side = rng.integers(0, 2, size=rows)
-
-    metastasis_logit = (
-        -2.0
-        + 0.6 * biopsy_grading
-        + 0.03 * (who_diagnosis_code - 100)
-        + 0.2 * (anatomic_region_grouping - anatomic_region_grouping.mean())
-        + rng.normal(0, 0.3, size=rows)
-    )
-    metastasis_present = (rng.random(size=rows) < _sigmoid(metastasis_logit)).astype(int)
-
-    return pd.DataFrame(
-        {
-            "gender": gender,
-            "institution": institution,
-            "biopsy_grading": biopsy_grading,
-            "who_diagnosis_code": who_diagnosis_code,
-            "anatomic_region_code": anatomic_region_code,
-            "anatomic_region_grouping": anatomic_region_grouping,
-            "anatomic_region_side": anatomic_region_side,
-            "metastasis_present_at_diagnosis": metastasis_present,
-        }
-    )
 
 
 def _parse_list(value: str | None) -> list[str] | None:
@@ -186,150 +138,12 @@ def _parse_list(value: str | None) -> list[str] | None:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def _load_config(config_path: str) -> dict:
-    """Load configuration from YAML or JSON file."""
-    config_file = Path(config_path)
-    if not config_file.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-    
-    with config_file.open("r", encoding="utf-8") as f:
-        if config_file.suffix.lower() in [".yaml", ".yml"]:
-            return yaml.safe_load(f)
-        elif config_file.suffix.lower() == ".json":
-            return json.load(f)
-        else:
-            raise ValueError(f"Unsupported config file format: {config_file.suffix}")
 
 
-def _load_data_from_mongodb(config: dict) -> pd.DataFrame:
-    """Load data from MongoDB using configuration."""
-    load_dotenv()
-    
-    # Get MongoDB connection details from config or environment
-    mongo_uri = config.get("mongodb", {}).get("uri") or os.getenv("MONGO_URI")
-    db_name = config.get("mongodb", {}).get("database") or os.getenv("MONGO_DB")
-    collection_name = config.get("mongodb", {}).get("collection") or os.getenv("MONGO_COLLECTION")
-    
-    if not all([mongo_uri, db_name, collection_name]):
-        raise ValueError("MongoDB connection details missing in config or environment variables")
-    
-    # Connect to MongoDB
-    client = MongoClient(mongo_uri)
-    db = client[db_name]
-    collection = db[collection_name]
-    
-    mongodb_config = config.get("mongodb", {})
-    pipeline = mongodb_config.get("pipeline")
-    
-    print(f"Connecting to MongoDB: {db_name}.{collection_name}")
-    
-    # Check if using aggregation pipeline or simple query
-    if pipeline:
-        print(f"Using aggregation pipeline with {len(pipeline)} stages")
-        cursor = collection.aggregate(pipeline)
-    else:
-        # Get query and projection for simple find
-        query = mongodb_config.get("query", {})
-        projection = mongodb_config.get("projection")
-        print(f"Query: {query}")
-        cursor = collection.find(query, projection)
-    
-    # Fetch data
-    data = list(cursor)
-    client.close()
-    
-    if not data:
-        raise ValueError("No data returned from MongoDB query")
-    
-    print(f"Loaded {len(data)} documents from MongoDB")
-    
-    # Convert to DataFrame
-    df = pd.json_normalize(data)
-    
-    # Remove MongoDB _id if present and not needed
-    if "_id" in df.columns and not mongodb_config.get("include_id", False):
-        df = df.drop(columns=["_id"])
-    
-    return df
 
 
-def _load_data_from_csv(csv_path: str, config: dict) -> pd.DataFrame:
-    """Load data from CSV file."""
-    csv_file = Path(csv_path)
-    if not csv_file.exists():
-        raise FileNotFoundError(f"CSV file not found: {csv_path}")
-    
-    print(f"Loading data from CSV: {csv_path}")
-    df = pd.read_csv(csv_path)
-    print(f"Loaded {len(df)} rows from CSV")
-    
-    return df
 
 
-def _apply_feature_selection(df: pd.DataFrame, config: dict) -> pd.DataFrame:
-    """Apply feature selection based on config."""
-    features = config.get("features", {})
-    
-    # Include specific features if specified
-    include_features = features.get("include")
-    if include_features:
-        missing_features = [f for f in include_features if f not in df.columns]
-        if missing_features:
-            raise ValueError(f"Features not found in data: {missing_features}")
-        df = df[include_features]
-        print(f"Selected {len(include_features)} features: {include_features}")
-    
-    # Exclude specific features if specified
-    exclude_features = features.get("exclude", [])
-    if exclude_features:
-        df = df.drop(columns=[f for f in exclude_features if f in df.columns])
-        print(f"Excluded features: {exclude_features}")
-    
-    return df
-
-
-def _build_constraints_from_config(config: dict) -> ConstraintSet | None:
-    """Build constraint set from configuration."""
-    constraints_config = config.get("constraints", {})
-    
-    if not constraints_config:
-        return None
-    
-    # Build edge constraints
-    edge_config = constraints_config.get("edges", {})
-    required_edges = set()
-    forbidden_edges = set()
-    
-    for edge in edge_config.get("required", []):
-        if isinstance(edge, list) and len(edge) == 2:
-            required_edges.add(tuple(edge))
-    
-    for edge in edge_config.get("forbidden", []):
-        if isinstance(edge, list) and len(edge) == 2:
-            forbidden_edges.add(tuple(edge))
-    
-    edge_constraints = EdgeConstraints(
-        required_edges=required_edges,
-        forbidden_edges=forbidden_edges
-    ) if (required_edges or forbidden_edges) else None
-    
-    # Build tier constraints
-    tier_config = constraints_config.get("tiers", {})
-    tier_constraints = None
-    
-    if tier_config.get("node_to_tier"):
-        tier_constraints = TierConstraints(
-            node_to_tier=tier_config["node_to_tier"],
-            allow_intra_tier_edges=tier_config.get("allow_intra_tier_edges", False)
-        )
-    
-    if edge_constraints or tier_constraints:
-        return ConstraintSet(
-            edge_constraints=edge_constraints,
-            tier_constraints=tier_constraints
-        )
-    
-    return None
 
 
 def _write_records(path: str, records: list[dict]) -> None:
@@ -384,53 +198,6 @@ def _constraint_conflicts(dag, constraints) -> list[dict]:
     return conflicts
 
 
-def _generate_data_summary(data: pd.DataFrame, binning_info: dict = None) -> pd.DataFrame:
-    """Generate a summary table with variable distributions and statistics."""
-    binning_info = binning_info or {}
-    summary_rows = []
-    
-    for col in data.columns:
-        # Get value counts
-        value_counts = data[col].value_counts().sort_index()
-        value_probs = data[col].value_counts(normalize=True).sort_index()
-        
-        # Basic statistics
-        summary = {
-            'variable': col,
-            'dtype': str(data[col].dtype),
-            'count': int(data[col].count()),
-            'missing': int(data[col].isna().sum()),
-            'unique_values': int(data[col].nunique()),
-            'min': data[col].min(),
-            'max': data[col].max(),
-            'mean': data[col].mean() if pd.api.types.is_numeric_dtype(data[col]) else None,
-            'median': data[col].median() if pd.api.types.is_numeric_dtype(data[col]) else None,
-            'std': data[col].std() if pd.api.types.is_numeric_dtype(data[col]) else None,
-        }
-        
-        # Add binning information if available
-        if col in binning_info:
-            bin_edges = binning_info[col].get('edges', [])
-            bin_ranges = []
-            for i in range(len(bin_edges) - 1):
-                bin_ranges.append(f"[{bin_edges[i]:.2f}, {bin_edges[i+1]:.2f})")
-            summary['binning_ranges'] = ' | '.join(bin_ranges) if bin_ranges else None
-            summary['binning_method'] = binning_info[col].get('method', 'unknown')
-        else:
-            summary['binning_ranges'] = None
-            summary['binning_method'] = None
-        
-        # Add distribution (top 5 most common values)
-        top_values = []
-        for val, count in value_counts.head(5).items():
-            prob = value_probs[val]
-            top_values.append(f"{val}:{count}({prob:.2%})")
-        summary['distribution'] = '; '.join(top_values)
-        
-        summary_rows.append(summary)
-    
-    return pd.DataFrame(summary_rows)
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Learn a DAG structure from CSV data or MongoDB.")
@@ -454,6 +221,7 @@ def main() -> None:
     parser.add_argument("--whitelist", help="Comma-separated list of nodes to include (overrides config).")
     parser.add_argument("--blacklist", help="Comma-separated list of nodes to exclude (overrides config).")
     parser.add_argument("--variant", help="PC variant (e.g., stable).")
+    
     parser.add_argument("--ci-test", dest="ci_test", help="Conditional independence test for PC.")
     parser.add_argument("--significance", type=float, help="Significance level for PC.")
     parser.add_argument("--score", help="Score function for GES.")
@@ -471,115 +239,38 @@ def main() -> None:
     # Load configuration if provided
     config = {}
     display_names = {}
+
+    DataProc = DataProcessing(args.config)
+
     if args.config:
-        config = _load_config(args.config)
+        
         print(f"Loaded configuration from: {args.config}")
         # Extract display names for visualization
         display_names = config.get('display_names', {})
-
-    # Load data based on input mode
-    if args.generate_rows:
-        data = generate_random_dataframe(args.generate_rows, args.seed)
-        print(f"Generated {args.generate_rows} rows of synthetic data with seed {args.seed}")
-    elif args.mongodb:
-        if not config:
-            parser.error("--config is required when using --mongodb")
-        data = _load_data_from_mongodb(config)
-    elif args.data:
-        data = _load_data_from_csv(args.data, config)
+        load_dotenv()
+        data = DataProc._load_data_from_mongodb()
     else:
         parser.error("One of --data, --mongodb, or --generate-rows must be specified.")
     
     # Apply feature selection from config
-    if config.get("features"):
-        data = _apply_feature_selection(data, config)
     
-    # Convert categorical string columns to numeric codes (for both pgmpy and causal-learn)
-    variable_types = config.get("variable_types") if config else None
+    data = DataProc._apply_feature_selection(data)
     
+
     # Apply custom mappings from config
-    mappings = config.get("mappings", {})
-    if mappings:
-        print("\nApplying custom mappings:")
-        for col, mapping in mappings.items():
-            if col in data.columns:
-                unique_before = data[col].unique()
-                print(f"  Column '{col}' unique values before mapping: {unique_before}")
-                data[col] = data[col].map(mapping)
-                
-                # Check for unmapped values (NaN after mapping)
-                unmapped_mask = data[col].isna()
-                if unmapped_mask.any():
-                    unmapped_values = data.loc[unmapped_mask, col].unique()
-                    print(f"    WARNING: Unmapped values found: {unmapped_values}")
-                    print(f"    Please add these values to the mapping in config file")
-                
-                print(f"  Mapped column '{col}': {mapping}")
+    data = DataProc._mapping_converter(data)
     
-    # First, convert ALL string/object columns to numeric codes (safety measure)
-    print("\nChecking for string columns to convert:")
-    for col in data.columns:
-        if data[col].dtype == 'object' or data[col].dtype.name == 'category':
-            print(f"  Converting column '{col}' (dtype: {data[col].dtype}) to numeric codes")
-            print(f"    Unique values: {data[col].unique()}")
-            data[col] = pd.Categorical(data[col]).codes
     
     # Then apply variable_types if specified (for additional control)
-    if variable_types:
-        for col, dtype in variable_types.items():
-            if col in data.columns and dtype in ['categorical', 'binary']:
-                if data[col].dtype == 'object' or data[col].dtype.name == 'category':
-                    print(f"  Additional conversion for '{col}' specified in variable_types")
-                    data[col] = pd.Categorical(data[col]).codes
+    data = DataProc._variable_type_converter(data)
     
     # Apply binning to numerical columns based on config
-    binning_config = config.get('binning', {})
-    binning_info = {}  # Store binning metadata for summary table
-    
-    if binning_config:
-        print("\nApplying binning to numerical columns:")
-        for col, bin_params in binning_config.items():
-            if col in data.columns:
-                n_bins = bin_params.get('n_bins', 5)
-                method = bin_params.get('method', 'quantile')
-                
-                # Only bin if column is numerical and not already discrete
-                if pd.api.types.is_numeric_dtype(data[col]) and not pd.api.types.is_integer_dtype(data[col]):
-                    print(f"  Binning '{col}': {n_bins} bins, method={method}")
-                    try:
-                        if method == 'quantile':
-                            binned_series, bin_edges = pd.qcut(data[col], q=n_bins, labels=False, duplicates='drop', retbins=True)
-                            data[col] = binned_series
-                        else:  # uniform
-                            binned_series, bin_edges = pd.cut(data[col], bins=n_bins, labels=False, duplicates='drop', retbins=True)
-                            data[col] = binned_series
-                        
-                        # Store binning metadata
-                        binning_info[col] = {
-                            'method': method,
-                            'edges': bin_edges.tolist()
-                        }
-                        
-                        print(f"    → Binned into {data[col].nunique()} discrete values")
-                        print(f"    → Bin edges: {[f'{e:.2f}' for e in bin_edges]}")
-                    except Exception as e:
-                        print(f"    WARNING: Binning failed for '{col}': {e}")
-                        # Fallback to uniform binning
-                        binned_series, bin_edges = pd.cut(data[col], bins=n_bins, labels=False, duplicates='drop', retbins=True)
-                        data[col] = binned_series
-                        binning_info[col] = {
-                            'method': 'uniform (fallback)',
-                            'edges': bin_edges.tolist()
-                        }
-                elif pd.api.types.is_integer_dtype(data[col]):
-                    print(f"  Skipping '{col}': already integer type")
-    
-    print(f"\nFinal data types:\n{data.dtypes}\n")
+    data, binning_info = DataProc.binning(data)
     
     # Generate data summary if requested
     if args.data_summary:
         print("Generating data summary table...")
-        summary_df = _generate_data_summary(data, binning_info)
+        summary_df = DataProc._generate_data_summary(data, binning_info)
         summary_path = Path(args.data_summary)
         summary_path.parent.mkdir(parents=True, exist_ok=True)
         summary_df.to_csv(summary_path, index=False)
@@ -587,7 +278,7 @@ def main() -> None:
         print(f"  Variables: {len(summary_df)}, Total observations: {len(data)}\n")
     
     # Build constraints from config
-    constraints = _build_constraints_from_config(config) if config else None
+    constraints = _build_constraints_from_config(DataProc.config)
     
     # Override with command-line constraints if provided (legacy support)
     if args.edge_constraints or args.tier_constraints or args.whitelist or args.blacklist:
@@ -600,7 +291,7 @@ def main() -> None:
         )
     
     # Use algorithm settings from config if available
-    algorithm_config = config.get("algorithm", {})
+    algorithm_config = DataProc.config.get("algorithm", {})
     method = algorithm_config.get("method", args.method)
     
     # Prepare algorithm kwargs
@@ -672,6 +363,10 @@ def main() -> None:
             ci_test=ci_test,
             significance_level=significance_level,
             expert_knowledge=expert_knowledge if constraints else None,
+            # NOTE: pgmpy 1.0 can raise KeyError in orient_colliders when
+            # enforce_expert_knowledge=True removes edges before sep-sets exist.
+            # Keep False and enforce hard constraints after estimation.
+            enforce_expert_knowledge=False,
         )
         
         # Save CI test log if requested
@@ -689,6 +384,12 @@ def main() -> None:
             nodes=list(learned_model.nodes()),
             edges=set(learned_model.edges())  # Convert to set, not list
         )
+
+        # Apply strict hard constraints post-learning (forbidden/tier + required).
+        # This avoids pgmpy enforce_expert_knowledge KeyError while still
+        # guaranteeing constraints in the final exported DAG.
+        if constraints is not None:
+            dag = constraints.apply_hard_constraints(dag)
         
         # Verify constraints were respected
         print(f"\nVerifying constraint compliance in learned DAG...")
@@ -703,7 +404,7 @@ def main() -> None:
                     src_tier = tier_map.get(src)
                     dst_tier = tier_map.get(dst)
                     if src_tier is not None and dst_tier is not None and src_tier > dst_tier:
-                        print(f"  ⚠ TIER VIOLATION: {src} (tier {src_tier}) → {dst} (tier {dst_tier})")
+                        print(f"TIER VIOLATION: {src} (tier {src_tier}) → {dst} (tier {dst_tier})")
                         violations_found = True
                         validation_records.append({
                             "stage": "verification",
@@ -785,7 +486,7 @@ def main() -> None:
             data = data.loc[:, constraints.filter_nodes(list(data.columns))]
         schema = DataSchema.from_dataframe(data)
         bundle = DataBundle(df=data, schema=schema)
-        learner = PCStableLearner(variable_types=variable_types)
+        learner = PCStableLearner(variable_types=DataProc.config.get("variable_types", {}))
         if kwargs.get("ci_test"):
             learner.set_ci_test(kwargs["ci_test"])
         if kwargs.get("significance_level") is not None:
