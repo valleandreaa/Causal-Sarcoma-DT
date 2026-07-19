@@ -43,6 +43,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -56,36 +57,107 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 from scipy import stats
 
+CURRENT_DIR = Path(__file__).resolve().parent
+WORKSPACE_DIR = CURRENT_DIR.parent if (CURRENT_DIR.parent / "causal-dtcygan").exists() else CURRENT_DIR.parent.parent
+for import_path in (CURRENT_DIR, WORKSPACE_DIR / "causal-dtcygan" / "src"):
+    import_path_str = str(import_path)
+    if import_path_str not in sys.path:
+        sys.path.insert(0, import_path_str)
+
+try:
+    from fit_bn_em import (  # noqa: E402
+        _apply_feature_selection as _bn_apply_feature_selection,
+        _load_data_from_mongodb as _bn_load_data_from_mongodb,
+    )
+    DataProcessing = None
+except ImportError:
+    from data_processing.data_processing import DataProcessing  # noqa: E402
+
+    _bn_apply_feature_selection = None
+    _bn_load_data_from_mongodb = None
+
 
 class ExploratoryAnalyzer:
     """Main class for performing exploratory data analysis on patient treatment data."""
     
     def __init__(self, config_path: str):
         """Initialize analyzer with configuration."""
+        self.config_path = Path(config_path).resolve()
         self.config = self._load_config(config_path)
         self.data = None
         self.processed_data = None
-        self.output_dir = Path(self.config['output']['base_dir'])
-        self.plots_dir = self.output_dir / self.config['output']['plots_dir']
-        self.tables_dir = self.output_dir / self.config['output']['tables_dir']
-        self.reports_dir = self.output_dir / self.config['output']['reports_dir']
+        output_config = self.config.get("output", {})
+        if output_config:
+            self.output_dir = Path(output_config.get("base_dir", "output/exploratory_analysis"))
+            self.plots_dir = self.output_dir / output_config.get("plots_dir", "plots")
+            self.tables_dir = self.output_dir / output_config.get("tables_dir", "tables")
+            self.reports_dir = self.output_dir / output_config.get("reports_dir", "reports")
+        else:
+            self.output_dir = self._default_output_dir()
+            self.plots_dir = self.output_dir / "plots"
+            self.tables_dir = self.output_dir / "tables"
+            self.reports_dir = self.output_dir / "reports"
         
         # Create output directories
         for directory in [self.output_dir, self.plots_dir, self.tables_dir, self.reports_dir]:
             directory.mkdir(parents=True, exist_ok=True)
         
         # Set visualization defaults
-        plt.style.use('seaborn-v0_8-' + self.config['visualization']['style'])
-        sns.set_palette(self.config['visualization']['palette'])
-        plt.rcParams['font.size'] = self.config['visualization']['font_size']
+        visualization = self.config.get("visualization", {})
+        plt.style.use("seaborn-v0_8-" + visualization.get("style", "whitegrid"))
+        sns.set_palette(visualization.get("palette", "Set2"))
+        plt.rcParams["font.size"] = visualization.get("font_size", 10)
     
     def _load_config(self, config_path: str) -> dict:
         """Load YAML configuration file."""
         with open(config_path, 'r') as f:
             return yaml.safe_load(f)
     
+    def _is_dag_feature_config(self) -> bool:
+        """Return True for configs used by DAG/BN fitting pipelines."""
+        return bool(self.config.get("features", {}).get("include"))
+
+    def _resolve_config_relative_path(self, path: str | None) -> Path | None:
+        """Resolve DAG config output paths the same way the fitting scripts do."""
+        if not path:
+            return None
+        candidate = Path(path)
+        if candidate.is_absolute():
+            return candidate
+        return self.config_path.parent.parent / candidate
+
+    def _default_output_dir(self) -> Path:
+        outputs = self.config.get("outputs", {})
+        data_summary = self._resolve_config_relative_path(outputs.get("data_summary"))
+        if data_summary:
+            return data_summary.parent
+        for method_config in self.config.get("algorithm", {}).get("methods", []):
+            dag_json = self._resolve_config_relative_path(method_config.get("outputs", {}).get("dag_json"))
+            if dag_json:
+                return dag_json.parent
+        return self.config_path.parent.parent / "output" / self.config_path.stem
+
+    def _load_feature_config_data(self) -> pd.DataFrame:
+        """Load MongoDB data through the same path used by the BN fitting code."""
+        if _bn_load_data_from_mongodb is not None:
+            return _bn_load_data_from_mongodb(self.config)
+        load_dotenv()
+        processor = DataProcessing(str(self.config_path))
+        return processor._load_data_from_mongodb()
+
+    def _select_feature_config_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Apply the configured feature list through the BN preprocessing helper."""
+        if _bn_apply_feature_selection is not None:
+            return _bn_apply_feature_selection(df, self.config)
+        processor = DataProcessing(str(self.config_path))
+        return processor._apply_feature_selection(df)
+
     def load_data_from_mongodb(self) -> None:
         """Load patient data from MongoDB."""
+        if self._is_dag_feature_config():
+            self.data = self._load_feature_config_data()
+            return
+
         load_dotenv()
         
         # Get MongoDB connection details
@@ -1239,7 +1311,9 @@ class ExploratoryAnalyzer:
         outcome_stats = {}
         
         if 'metastasis_present_at_diagnosis' in df.columns:
-            met_at_dx = (df['metastasis_present_at_diagnosis'] == 'yes').sum()
+            met_at_dx = df['metastasis_present_at_diagnosis'].apply(
+                lambda value: str(value).strip().lower() in {'yes', '1', 'true'}
+            ).sum()
             outcome_stats['Metastasis at Diagnosis (n)'] = met_at_dx
             outcome_stats['Metastasis at Diagnosis (%)'] = met_at_dx / len(df) * 100
         
@@ -2494,6 +2568,224 @@ class ExploratoryAnalyzer:
         
         print(f"Saved clinical outcomes analysis to: {self.tables_dir}")
     
+    def _apply_config_mappings(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Apply mappings and conservative type conversion from a DAG config."""
+        df = df.copy()
+        mappings = self.config.get("mappings", {})
+        for col, mapping in mappings.items():
+            if col not in df.columns:
+                continue
+            before = df[col].copy()
+            df[col] = df[col].map(mapping)
+            unmapped = before[df[col].isna() & before.notna()].drop_duplicates().tolist()
+            if unmapped:
+                print(f"WARNING: {col} has unmapped values: {unmapped}")
+
+        variable_types = self.config.get("variable_types", {})
+        for col in df.columns:
+            if col not in variable_types:
+                continue
+            dtype = variable_types[col]
+            if dtype == "binary" and not pd.api.types.is_numeric_dtype(df[col]):
+                lowered = df[col].astype("string").str.strip().str.lower()
+                binary_map = {
+                    "true": 1,
+                    "yes": 1,
+                    "y": 1,
+                    "1": 1,
+                    "false": 0,
+                    "no": 0,
+                    "n": 0,
+                    "0": 0,
+                }
+                converted = lowered.map(binary_map)
+                if converted.notna().any():
+                    df[col] = converted.where(df[col].notna(), np.nan)
+            elif dtype == "categorical" and not pd.api.types.is_numeric_dtype(df[col]):
+                codes = pd.Categorical(df[col]).codes.astype(float)
+                codes[codes == -1] = np.nan
+                df[col] = codes
+
+        for col in df.columns:
+            if df[col].dtype == "object" or df[col].dtype.name == "category":
+                numeric = pd.to_numeric(df[col], errors="coerce")
+                if numeric.notna().sum() == df[col].notna().sum():
+                    df[col] = numeric
+                else:
+                    codes = pd.Categorical(df[col]).codes.astype(float)
+                    codes[codes == -1] = np.nan
+                    df[col] = codes
+        return df
+
+    def _apply_config_binning(self, df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
+        """Apply the same configured numeric binning used before DAG learning/fitting."""
+        df = df.copy()
+        binning_info: dict[str, dict[str, Any]] = {}
+        for col, params in self.config.get("binning", {}).items():
+            if col not in df.columns:
+                continue
+            numeric = pd.to_numeric(df[col], errors="coerce")
+            if numeric.dropna().empty:
+                continue
+            n_bins = int(params.get("n_bins", 5))
+            method = params.get("method", "quantile")
+            try:
+                if method == "quantile":
+                    binned, edges = pd.qcut(numeric, q=n_bins, labels=False, duplicates="drop", retbins=True)
+                else:
+                    binned, edges = pd.cut(numeric, bins=n_bins, labels=False, duplicates="drop", retbins=True)
+            except ValueError:
+                binned, edges = pd.cut(numeric, bins=min(n_bins, numeric.nunique()), labels=False, duplicates="drop", retbins=True)
+            df[col] = binned.astype(float)
+            binning_info[col] = {"method": method, "edges": [float(edge) for edge in edges]}
+        return df, binning_info
+
+    def _feature_data_summary(self, df: pd.DataFrame, binning_info: dict[str, dict[str, Any]]) -> pd.DataFrame:
+        rows = []
+        display_names = self.config.get("display_names", {})
+        variable_types = self.config.get("variable_types", {})
+        total = len(df)
+        for col in df.columns:
+            counts = df[col].value_counts(dropna=False)
+            distribution = []
+            for value, count in counts.items():
+                label = "Missing" if pd.isna(value) else str(value)
+                pct = 100 * count / total if total else 0
+                distribution.append(f"{label}:{int(count)}({pct:.1f}%)")
+            rows.append({
+                "variable": col,
+                "display_name": display_names.get(col, col),
+                "variable_type": variable_types.get(col),
+                "dtype": str(df[col].dtype),
+                "rows": int(total),
+                "observed": int(df[col].notna().sum()),
+                "missing": int(df[col].isna().sum()),
+                "missing_pct": float(100 * df[col].isna().mean()) if total else 0.0,
+                "unique_values": int(df[col].nunique(dropna=True)),
+                "min": df[col].min(skipna=True) if pd.api.types.is_numeric_dtype(df[col]) else None,
+                "max": df[col].max(skipna=True) if pd.api.types.is_numeric_dtype(df[col]) else None,
+                "mean": df[col].mean(skipna=True) if pd.api.types.is_numeric_dtype(df[col]) else None,
+                "binning_method": binning_info.get(col, {}).get("method"),
+                "binning_edges": json.dumps(binning_info.get(col, {}).get("edges")) if col in binning_info else None,
+                "distribution": "; ".join(distribution[:10]),
+            })
+        return pd.DataFrame(rows)
+
+    def _write_feature_value_counts(self, df: pd.DataFrame) -> None:
+        rows = []
+        display_names = self.config.get("display_names", {})
+        for col in df.columns:
+            counts = df[col].value_counts(dropna=False)
+            for value, count in counts.items():
+                rows.append({
+                    "variable": col,
+                    "display_name": display_names.get(col, col),
+                    "value": "Missing" if pd.isna(value) else value,
+                    "count": int(count),
+                    "pct": float(100 * count / len(df)) if len(df) else 0.0,
+                })
+        pd.DataFrame(rows).to_csv(self.tables_dir / "local_recurrence_value_counts.csv", index=False)
+
+    def _write_feature_crosstabs(self, df: pd.DataFrame) -> None:
+        treatment = "treatments.radiotherapy_preoperative"
+        outcome = "treatments.any_local_recurrence"
+        if treatment not in df.columns or outcome not in df.columns:
+            return
+        rows = []
+        for col in df.columns:
+            if col in {treatment, outcome}:
+                continue
+            table = pd.crosstab(
+                df[col].fillna("Missing"),
+                [df[treatment].fillna("Missing"), df[outcome].fillna("Missing")],
+                dropna=False,
+            )
+            table.to_csv(self.tables_dir / f"crosstab_{col.replace('.', '_')}.csv")
+            grouped = df.groupby([col, treatment], dropna=False)[outcome].agg(["count", "mean"]).reset_index()
+            grouped.insert(0, "stratifier", col)
+            rows.extend(grouped.to_dict("records"))
+        if rows:
+            pd.DataFrame(rows).to_csv(self.tables_dir / "local_recurrence_by_rt_strata.csv", index=False)
+
+    def _plot_feature_distributions(self, df: pd.DataFrame) -> None:
+        display_names = self.config.get("display_names", {})
+        for col in df.columns:
+            counts = df[col].fillna("Missing").astype(str).value_counts().sort_index()
+            fig, ax = plt.subplots(figsize=(8, 4.5))
+            sns.barplot(x=counts.index.astype(str), y=counts.values, ax=ax, color="#4c78a8")
+            ax.set_title(display_names.get(col, col))
+            ax.set_xlabel("")
+            ax.set_ylabel("Patients")
+            ax.tick_params(axis="x", rotation=35)
+            fig.tight_layout()
+            fig.savefig(self.plots_dir / f"distribution_{col.replace('.', '_')}.png", dpi=220)
+            plt.close(fig)
+
+        numeric = df.apply(pd.to_numeric, errors="coerce")
+        if numeric.shape[1] > 1:
+            fig, ax = plt.subplots(figsize=(9, 7))
+            sns.heatmap(numeric.corr(), cmap="vlag", center=0, annot=False, ax=ax)
+            ax.set_title("Local recurrence feature correlations")
+            fig.tight_layout()
+            fig.savefig(self.plots_dir / "local_recurrence_feature_correlations.png", dpi=220)
+            plt.close(fig)
+
+    def _write_feature_html_report(self, summary: pd.DataFrame) -> None:
+        report_path = self.reports_dir / "local_recurrence_data_explorer.html"
+        top_missing = summary.sort_values("missing_pct", ascending=False).head(10)
+        html = f"""
+        <html>
+        <head><title>Local Recurrence Data Explorer</title></head>
+        <body>
+        <h1>Local Recurrence Data Explorer</h1>
+        <p>Config: {self.config_path}</p>
+        <p>Rows: {len(self.processed_data)} | Variables: {len(self.processed_data.columns)}</p>
+        <h2>Variables</h2>
+        {summary.to_html(index=False)}
+        <h2>Highest Missingness</h2>
+        {top_missing[['variable', 'display_name', 'missing', 'missing_pct']].to_html(index=False)}
+        </body>
+        </html>
+        """
+        report_path.write_text(html, encoding="utf-8")
+        print(f"HTML report saved to: {report_path}")
+
+    def run_feature_config_analysis(self) -> None:
+        """Explore data using a DAG/BN config such as local_recurrence_dag_whoops.yaml."""
+        print("\n" + "=" * 80)
+        print(" " * 18 + "LOCAL RECURRENCE DATA EXPLORER")
+        print("=" * 80)
+        print(f"Config: {self.config_path}")
+
+        raw_data = self._load_feature_config_data()
+        selected = self._select_feature_config_data(raw_data)
+        mapped = self._apply_config_mappings(selected)
+        processed, binning_info = self._apply_config_binning(mapped)
+        self.data = raw_data
+        self.processed_data = processed
+
+        processed_path = self.tables_dir / "local_recurrence_processed_data.csv"
+        processed.to_csv(processed_path, index=False)
+        print(f"Processed local recurrence data saved to: {processed_path}")
+
+        summary = self._feature_data_summary(processed, binning_info)
+        summary_path = self._resolve_config_relative_path(self.config.get("outputs", {}).get("data_summary"))
+        if summary_path is None:
+            summary_path = self.tables_dir / "local_recurrence_data_summary.csv"
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary.to_csv(summary_path, index=False)
+        print(f"Data summary saved to: {summary_path}")
+
+        self._write_feature_value_counts(processed)
+        self._write_feature_crosstabs(processed)
+        self._plot_feature_distributions(processed)
+        self._write_feature_html_report(summary)
+
+        print("\n" + "=" * 80)
+        print(" " * 27 + "EXPLORATION COMPLETE")
+        print(f"Results saved to: {self.output_dir}")
+        print("=" * 80 + "\n")
+
     def generate_html_report(self) -> None:
         """Generate comprehensive HTML summary report."""
         print("\nGenerating HTML summary report...")
@@ -2923,15 +3215,16 @@ class ExploratoryAnalyzer:
         print(f"HTML report saved to: {report_path}")
     
     def run_analysis(self) -> None:
-        """
-        Run the complete exploratory analysis pipeline.
-        
-        EXECUTION ORDER:
-        1. Load data from MongoDB
-        2. FILTER to remove non-malignant cases (benign, not_a_sarcoma, suspicious)
-        3. Extract patient characteristics from filtered data
-        4. Run all analyses with None/null values shown as 'Missing'
-        """
+        """Run the exploratory analysis pipeline for legacy or DAG/BN configs."""
+        if self._is_dag_feature_config():
+            self.run_feature_config_analysis()
+            return
+
+        # Legacy EDA execution order:
+        # 1. Load data from MongoDB.
+        # 2. Filter non-malignant cases.
+        # 3. Extract patient characteristics.
+        # 4. Run broad treatment-distribution analyses.
         print("\n" + "=" * 80)
         print(" " * 20 + "EXPLORATORY DATA ANALYSIS PIPELINE")
         print("=" * 80)

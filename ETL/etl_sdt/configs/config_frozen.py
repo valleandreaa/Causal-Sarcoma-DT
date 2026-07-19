@@ -11,6 +11,7 @@ feature_mapping = {
             "biopsy_grading",
             "who_diagnosis_code",
             "anatomic_region_code",
+            "body_location_group",
             "anatomic_region_grouping",
             "anatomic_region_side",
             "metastasis_present_at_diagnosis"
@@ -25,6 +26,7 @@ feature_mapping = {
             "surgery_institution",
             "tumor_max_size_before_surgery",
             "pathologist_margin_judgement",
+            "pathologist_margin_judgment",
         ],
     },
 
@@ -54,6 +56,7 @@ feature_mapping = {
                 "whoops_margin_status",
                 "tumor_max_size_before_surgery",
                 "pathologist_margin_judgement",
+                "pathologist_margin_judgment",
                 "surgery_indication",
                 "surgery_institution",
 
@@ -170,6 +173,9 @@ label_dict = {
             "[2] G2": "G2",
             "[3] G3": "G3",
             "benign": "benign",
+            "malignant": "G3",
+            "high-grade": "G3",
+            "high_grade": "G3",
             "[5] suspicious of malignancy": "suspicious_of_malignancy",
             "[6] non-diagnostic": "non_diagnostic",
             "NA": "na",
@@ -184,6 +190,9 @@ label_dict = {
             "[2] G2": "G2",
             "[3] G3": "G3",
             "benign": "benign",
+            "malignant": "G3",
+            "high-grade": "G3",
+            "high_grade": "G3",
             "[5] suspicious of malignancy": "suspicious_of_malignancy",
             "[6] non-diagnostic": "non_diagnostic",
             "NA": "na",
@@ -840,6 +849,15 @@ label_dict = {
         "mode": "token",
     },
 
+    "pathologist_margin_judgment": {
+        "mapping": {
+            "R0": "R0",
+            "R1": "R1",
+            "R2": "R2",
+        },
+        "mode": "token",
+    },
+
     "first_radiotherapy_type": {
         "mapping": {
             "1 intensity modulated radiotherapy": "imrt",
@@ -881,12 +899,12 @@ label_dict = {
 
     "metastasis_present_at_diagnosis": {
         "mapping": {
-            "[0] No": "no",
-            "[1] Yes": "yes",
-            "[0] Localized disease": "localized_disease",
-            "[1] Oligometastatic disease (5 or less lesions)": "oligometastatic_5_or_less",
-            "[2] Polymetastatic disease (6 and more lesions)": "polymetastatic_6_or_more",
-            "[3] unknown": "unknown",
+            "[0] No": 0,
+            "[1] Yes": 1,
+            "[0] Localized disease": 0,
+            "[1] Oligometastatic disease (5 or less lesions)": 1,
+            "[2] Polymetastatic disease (6 and more lesions)": 1,
+            "[3] unknown": None,
         },
         "mode": "token",
     },
@@ -1135,6 +1153,7 @@ column_renaming_map = {
     # systemic therapy (SystTx)
     "Reason for systemic treatment": "systemic_treatment_reason",
     "Line of Treatment": "line_of_treatment",
+    "Type of SystTx": "systemic_therapy_type",
     "Type of SystTx\n=nicht mappen": "systemic_therapy_type",
     "Name of drug": "drug_name",
     "Softtissue Protocol Name": "soft_tissue_protocol_name",
@@ -1195,6 +1214,7 @@ data_type_mapping = {
 
     # tumor / location
     "anatomic_region_code": str,
+    "body_location_group": str,
     "anatomic_region_grouping": str,
     "anatomic_region_side": str,
 
@@ -1212,6 +1232,8 @@ data_type_mapping = {
     "surgery_institution": str,
     "tumor_max_size_before_surgery": float,
     "pathologist_margin_judgement": str,
+    "pathologist_margin_judgment": str,
+    "pathologist_margin_judgment_pre_rt": str,
 
     # sizes
     "size_a_mm": float,
@@ -1298,6 +1320,6 @@ data_type_mapping = {
     "date_pulmonary_metastasis": "datetime",
     "date_extrapulmonary_metastasis": "datetime",
     "site_extrapulmonary_metastasis": str,
-    "metastasis_present_at_diagnosis": str,  # make int/bool if normalized
+    "metastasis_present_at_diagnosis": int,
     "metastasis_at_follow_up": str,
 }

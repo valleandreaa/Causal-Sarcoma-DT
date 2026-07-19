@@ -1146,6 +1146,7 @@ class DictionaryTransformer:
             "radiotherapy_preoperative": 0,
             "any_metastasis":            0,
             "any_local_recurrence":      0,
+            "local_recurrence_initial_diagnosis_timerange": None,
             "any_whoops":                0,
             "dod":                       0,
         }
@@ -1174,6 +1175,8 @@ class DictionaryTransformer:
             if earliest_definitive_surgery_date is not None
             else earliest_any_surgery_date
         )
+
+        earliest_local_recurrence_days = None
 
         for episode in episodes:
             if episode.get("surgery", 0):
@@ -1227,12 +1230,42 @@ class DictionaryTransformer:
 
             # DOD is stored in the diagnosis list under section "follow_up"
             for diag in episode.get("diagnosis", []):
+                if diag.get("section") == "local_recurrence":
+                    lr_days = diag.get("local_recurrence_initial_diagnosis_timerange")
+                    if is_non_placeholder(lr_days):
+                        try:
+                            lr_days = int(lr_days)
+                        except (TypeError, ValueError):
+                            lr_days = None
+                        if lr_days is not None and (
+                            earliest_local_recurrence_days is None
+                            or lr_days < earliest_local_recurrence_days
+                        ):
+                            earliest_local_recurrence_days = lr_days
+
                 if (diag.get("section") == "follow_up" and
                         diag.get("last_status") == "DOD"):
                     treatments["dod"] = 1
-                    break
+
+        if treatments["any_local_recurrence"]:
+            treatments["local_recurrence_initial_diagnosis_timerange"] = earliest_local_recurrence_days
 
         return treatments
+
+    def add_preoperative_rt_margin(self, patient_record: dict) -> dict:
+        treatments = patient_record.setdefault("treatments", {})
+        margin = treatments.get("pathologist_margin_judgement")
+        if not self._is_valid_value(margin):
+            margin = treatments.get("pathologist_margin_judgment")
+
+        if not self._is_valid_value(margin):
+            return patient_record
+
+        treatments.setdefault("pathologist_margin_judgment", margin)
+        if treatments.get("radiotherapy_preoperative") == 1:
+            treatments["pathologist_margin_judgment_pre_rt"] = margin
+
+        return patient_record
 
 
     def data_assembler(self, episode):
@@ -1552,6 +1585,12 @@ class DictionaryTransformer:
                             fallback_parsed_date = get_first_valid_date_value(fallback_rt_date)
                             if fallback_parsed_date is not None:
                                 dict_tmp['date_field'] = fallback_parsed_date
+                        elif group == 'systemic_therapy':
+                            # Some systemic rows only contain the cycle end date.
+                            fallback_systemic_date = row.get('cycle_end_date')
+                            fallback_parsed_date = get_first_valid_date_value(fallback_systemic_date)
+                            if fallback_parsed_date is not None:
+                                dict_tmp['date_field'] = fallback_parsed_date
                     
                     if 'date_sarcoma_board' in config:
                         date_sb = row.get(config['date_sarcoma_board'])
@@ -1601,6 +1640,7 @@ class DictionaryTransformer:
                 patient_static_data=patient_record  # Pass the entire patient record for static data access
             )
             patient_record['treatments'].update(self.group_episodes_into_treatments(patient_record['episodes']))
+            self.add_preoperative_rt_margin(patient_record)
             records.append(patient_record)
 
         return records
@@ -1867,6 +1907,35 @@ class FeatureExtractor:
     """
     This class is responsible for extracting relevant features from a DataFrame.
     """
+
+    UPPER_EXTREMITY_LOCATION_CODES = frozenset({
+        "clavicle",
+        "scapula",
+        "shoulder_girdle",
+        "scapular_region",
+        "axilla",
+        "shoulder_joint",
+        "humerus",
+        "upper_arm",
+        "elbow",
+        "elbow_region",
+        "forearm_bones",
+        "forearm",
+        "wrist",
+        "hand",
+    })
+    LOWER_EXTREMITY_LOCATION_CODES = frozenset({
+        "hip_joint",
+        "thigh",
+        "femur",
+        "knee",
+        "patella",
+        "lower_leg",
+        "tibia_fibula",
+        "ankle",
+        "foot",
+        "inguinal_region",
+    })
 
     def __init__(self, df, relevant_features, data_type_mapping = None):
         self.df = df
@@ -2561,7 +2630,48 @@ class FeatureExtractor:
         self.data_type_mapping['radiation_oncology_flag'] = int
         
         #chemotherapy_flag
-        self.df['chemotherapy_flag'] = self.df.apply(lambda row: 1 if pd.notnull(row['systemic_treatment_reason']) else 0, axis=1)
+        def has_systemic_therapy_evidence(row):
+            def is_systemic_present(value):
+                if isinstance(value, dict):
+                    if "$date" in value:
+                        return is_systemic_present(value.get("$date"))
+                    return any(is_systemic_present(v) for v in value.values())
+
+                if isinstance(value, (list, tuple, set, np.ndarray, pd.Series)):
+                    return any(is_systemic_present(v) for v in value)
+
+                if value is None:
+                    return False
+
+                if isinstance(value, str):
+                    return value.strip().lower() not in {
+                        "", "nan", "none", "-", "--", "na", "n/a", "nicht mappen"
+                    }
+
+                return bool(pd.notnull(value))
+
+            evidence_fields = [
+                'systemic_treatment_reason',
+                'line_of_treatment',
+                'systemic_therapy_type',
+                'drug_name',
+                'soft_tissue_protocol_name',
+                'bone_protocol_name',
+                'clinical_trial',
+                'cycle_start_date',
+                'cycle_end_date',
+                'systemic_therapy_discontinuation_reason',
+                'num_cycles_executed',
+                'dose_unit',
+                'dose_reduction',
+                'applied_dose_mg_m2',
+                'toxicity_days_of_cycle',
+                'toxicity_type',
+                'ctcae_grade',
+            ]
+            return 1 if any(is_systemic_present(row.get(field)) for field in evidence_fields) else 0
+
+        self.df['chemotherapy_flag'] = self.df.apply(has_systemic_therapy_evidence, axis=1)
 
         self.relevant_features['dynamic']["systemic_therapy"]['chemotherapy_flag'] = 'chemotherapy_flag'
         self.data_type_mapping['chemotherapy_flag'] = int
@@ -2629,6 +2739,16 @@ class FeatureExtractor:
         self.data_type_mapping['initial_size'] = int
         return self
 
+
+    def get_initial_pathology_report_date(self):
+        """Use the earliest pathology report date as the patient-level initial diagnosis date."""
+        if 'patient_id' not in self.df.columns or 'date_pathology_report' not in self.df.columns:
+            return self
+
+        self.df['date_pathology_report'] = pd.to_datetime(self.df['date_pathology_report'], errors='coerce')
+        initial_dates = self.df.groupby('patient_id')['date_pathology_report'].transform('min')
+        self.df['date_pathology_report'] = initial_dates.fillna(self.df['date_pathology_report'])
+        return self
 
     def get_merge_grading_biopsy_resection(self):
         
@@ -2716,7 +2836,11 @@ class FeatureExtractor:
 
     def get_episodes_systemic(self):
         
-        self.df["episodes_systemic"]  = self.time_range_in_episodes('cycle_start_date', 'date_pathology_report')
+        self.df['_systemic_episode_date'] = pd.to_datetime(
+            self.df.get('cycle_start_date'),
+            errors='coerce'
+        ).fillna(pd.to_datetime(self.df.get('cycle_end_date'), errors='coerce'))
+        self.df["episodes_systemic"]  = self.time_range_in_episodes('_systemic_episode_date', 'date_pathology_report')
 
         self.relevant_features['dynamic']['systemic_therapy']['episodes_field'] = 'episodes_systemic'
         self.data_type_mapping['episodes_systemic'] = int
@@ -2964,6 +3088,24 @@ class FeatureExtractor:
         self.data_type_mapping['episodes_local_recurrence'] = int
         return self
     
+    def get_local_recurrence_initial_diagnosis_timerange(self):
+        """
+        Calculates days from initial diagnosis/pathology date to local recurrence.
+        """
+        self.df["local_recurrence_initial_diagnosis_timerange"] = self.time_range_in_days(
+            'date_local_recurrence',
+            'date_pathology_report'
+        )
+        self.df["local_recurrence_initial_diagnosis_timerange"] = self.df[
+            "local_recurrence_initial_diagnosis_timerange"
+        ].where(self.df["local_recurrence_initial_diagnosis_timerange"] >= 0, None)
+
+        lr_fields = self.relevant_features['dynamic']['local_recurrence']['fields']
+        if 'local_recurrence_initial_diagnosis_timerange' not in lr_fields:
+            lr_fields.append('local_recurrence_initial_diagnosis_timerange')
+        self.data_type_mapping['local_recurrence_initial_diagnosis_timerange'] = int
+        return self
+    
     def get_episodes_metastasis(self):
         """
         Creates episode numbers for metastasis events based on date_metastasis.
@@ -3018,44 +3160,80 @@ class FeatureExtractor:
         return (self.get_metastasis_after_first_treatment()
                 .df)
     
+    def _add_static_feature(self, group_name, field_name):
+        features = self.relevant_features.get('static', {}).get(group_name)
+        if isinstance(features, list) and field_name not in features:
+            features.append(field_name)
+        elif isinstance(features, dict) and field_name not in features:
+            features[field_name] = field_name
+
+    def _add_dynamic_field(self, group_name, field_name):
+        group = self.relevant_features.get('dynamic', {}).get(group_name, {})
+        fields = group.get('fields')
+        if isinstance(fields, list) and field_name not in fields:
+            fields.append(field_name)
+        elif isinstance(fields, dict) and field_name not in fields:
+            fields[field_name] = field_name
+
+    def get_margin_aliases(self):
+        if 'pathologist_margin_judgement' in self.df.columns:
+            self.df['pathologist_margin_judgment'] = self.df['pathologist_margin_judgement']
+        elif 'pathologist_margin_judgment' not in self.df.columns:
+            self.df['pathologist_margin_judgment'] = np.nan
+
+        self._add_static_feature('treatments', 'pathologist_margin_judgment')
+        self._add_dynamic_field('surgery', 'pathologist_margin_judgment')
+        if self.data_type_mapping is not None:
+            self.data_type_mapping['pathologist_margin_judgment'] = str
+            self.data_type_mapping['pathologist_margin_judgment_pre_rt'] = str
+        return self
+
+    @classmethod
+    def _map_body_location_group(cls, value):
+        if isinstance(value, (list, tuple, set, np.ndarray, pd.Series)):
+            for item in value:
+                mapped = cls._map_body_location_group(item)
+                if mapped is not None:
+                    return mapped
+            return None
+
+        if value is None or pd.isna(value):
+            return None
+
+        location_code = str(value).strip().lower()
+        if not location_code or location_code == 'unknown':
+            return None
+        if location_code in cls.UPPER_EXTREMITY_LOCATION_CODES:
+            return 'upper_extremity'
+        if location_code in cls.LOWER_EXTREMITY_LOCATION_CODES:
+            return 'lower_extremity'
+        return 'trunk'
+
+    def get_body_location_group(self):
+        if 'anatomic_region_code' not in self.df.columns:
+            return self
+
+        self.df['body_location_group'] = self.df['anatomic_region_code'].apply(self._map_body_location_group)
+        self._add_static_feature('tumor_characteristics', 'body_location_group')
+        if self.data_type_mapping is not None:
+            self.data_type_mapping['body_location_group'] = str
+        return self
+
     def get_extremity_tumor(self):
-        self.df['extremity_tumor'] = self.df['anatomic_region_code'].apply(lambda x: 1 if x in  [
-    # upper extremity
-    "clavicle",
-    "scapula",
-    "shoulder_girdle",
-    "scapular_region",
-    "axilla",
-    "shoulder_joint",
-    "humerus",
-    "upper_arm",
-    "elbow",
-    "elbow_region",
-    "forearm_bones",
-    "forearm",
-    "wrist",
-    "hand",
+        if 'anatomic_region_code' not in self.df.columns:
+            return self
 
-    # lower extremity
-    "hip_joint",
-    "thigh",
-    "femur",
-    "knee",
-    "patella",
-    "lower_leg",
-    "tibia_fibula",
-    "ankle",
-    "foot",
-
-    # groin / proximal lower limb (common choice for "extremity")
-    "inguinal_region",
-] else 0)
-        self.relevant_features['static']['tumor_characteristics'].append('extremity_tumor')
-        self.data_type_mapping['extremity_tumor'] = int
+        self.df['extremity_tumor'] = self.df['anatomic_region_code'].apply(
+            lambda value: 1 if self._map_body_location_group(value) in {'upper_extremity', 'lower_extremity'} else 0
+        )
+        self._add_static_feature('tumor_characteristics', 'extremity_tumor')
+        if self.data_type_mapping is not None:
+            self.data_type_mapping['extremity_tumor'] = int
         return self
 
     def process_frozen(self):
-        return (self.get_age()
+        return (self.get_initial_pathology_report_date()
+                .get_age()
                 .get_initial_size()
                 .get_episodes_whoops()
                 .get_episodes_systemic()
@@ -3066,11 +3244,14 @@ class FeatureExtractor:
                 .get_merge_radiotherapy_indication_raw()
                 .get_expand_local_recurrence()
                 .get_episodes_local_recurrence()
+                .get_local_recurrence_initial_diagnosis_timerange()
                 .get_expand_metastasis()
                 .get_episodes_metastasis()
                 .get_episodes_follow_up()
                 .get_merge_grading_biopsy_resection()
                 .get_therapy_flag()
+                .get_margin_aliases()
+                .get_body_location_group()
                 .get_extremity_tumor()
                 .remove_duplicates_drug_names()
                 .df)

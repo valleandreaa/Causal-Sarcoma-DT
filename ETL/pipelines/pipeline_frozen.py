@@ -36,8 +36,8 @@ def process_file(file_path, collection, preview=False, preview_n=5, timeline=Fal
         # df_chunk = dict_transf.aggregate_dataframe(df_chunk)
         df_chunk = dict_transf.renaming(df_chunk)
         df_chunk = dict_transf.transform_nested_values(df_chunk)
-        df_chunk = dict_transf.transform_dataframe(df_chunk, data_format_dict=data_type_mapping)
         df_chunk = dict_transf.map_columns_with_partial_labels(df_chunk, label_dict)
+        df_chunk = dict_transf.transform_dataframe(df_chunk, data_format_dict=data_type_mapping)
         fe = FeatureExtractor(df_chunk, feature_mapping, data_type_mapping)
         df_chunk = fe.process_frozen()
 
